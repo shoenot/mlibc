@@ -17,6 +17,7 @@ struct PacketFlags {
 
 struct Signal {
     uint32_t bits;
+    Signal() = default;
     constexpr Signal(uint32_t val) : bits(val) {}
 
     static const uint32_t READABLE  = 1 << 0;
@@ -29,6 +30,7 @@ struct Signal {
 
 struct AccessRights {
     uint32_t bits;
+    AccessRights() = default;
     constexpr AccessRights(uint32_t val) : bits(val) {}
 
     static const uint32_t READ    = 1 << 0;
