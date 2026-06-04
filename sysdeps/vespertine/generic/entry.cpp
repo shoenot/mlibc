@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include <mlibc/sysdeps.hpp>
-#include <abi/vespertine_abi.hpp> // Includes the massive cbindgen header
+#include <abi/vespertine_abi.hpp>
 
 struct HandleGrant {
     HandleID id;
@@ -37,14 +37,12 @@ struct FdTable {
     size_t capacity;
 };
 
-HandleID g_self_handle = 1;
-HandleID g_root_handle = 0;
-HandleID g_mem_pool = 0;
+extern HandleID g_self_handle;
+extern HandleID g_root_handle;
+extern HandleID g_mem_pool;
+extern FdTable g_fd_table;
 
-static HandleID bootstrap_fds[STATIC_FD_BOOTSTRAP_CAP] = {0};
-FdTable g_fd_table = { bootstrap_fds, STATIC_FD_BOOTSTRAP_CAP };
-
-extern "C" void __mlibc_start_main(int argc, char **argv, char **envp);
+extern "C" int main(int argc, char **argv, char **envp);
 
 extern "C" void __mlibc_entry(ProcessInitPackage *pkg) {
     if (pkg) {
@@ -90,5 +88,6 @@ extern "C" void __mlibc_entry(ProcessInitPackage *pkg) {
     char **argv_val = (pkg) ? const_cast<char**>(pkg->argv) : nullptr;
     char **envp_val = (pkg && pkg->envp) ? const_cast<char**>(pkg->envp) : empty_env;
 
-    __mlibc_start_main(argc_val, argv_val, envp_val);
+    int result = main(argc_val, argv_val, envp_val);
+    exit(result);
 }

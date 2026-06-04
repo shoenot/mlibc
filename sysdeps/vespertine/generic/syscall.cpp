@@ -27,6 +27,8 @@ struct SyscallResult {
     SysError error;
 };
 
+extern "C" {
+
 SyscallResult sys_invoke(HandleID handle, const void *op) {
     size_t ret;
     size_t payload;
@@ -69,7 +71,7 @@ SyscallResult sys_thread_terminate() {
         "mov $2, %%rax\n\t"
         "syscall"
         : "=a"(ret)
-        : // No inputs needed
+        : 
         : "rcx", "r11", "memory"
     );
     __builtin_unreachable(); 
@@ -81,7 +83,7 @@ SyscallResult sys_thread_yield() {
         "mov $3, %%rax\n\t"
         "syscall"
         : "=a"(ret)
-        : // No inputs needed
+        :
         : "rcx", "r11", "memory"
     );
     return {0, static_cast<SysError>(ret)};
@@ -113,3 +115,4 @@ SyscallResult sys_futex_wake(uintptr_t addr, size_t count) {
     return {0, static_cast<SysError>(ret)};
 }
 
+} // extern "C"
