@@ -21,6 +21,7 @@ struct VespertineSysdepTags :
     Open,
     VmMap,
     VmUnmap,
+    VmProtect,
     ClockGet
 {};
 

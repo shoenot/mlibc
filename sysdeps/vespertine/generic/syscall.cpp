@@ -93,7 +93,7 @@ SyscallResult sys_futex_wait(uintptr_t addr, uint32_t expected) {
     size_t ret;
     size_t payload;
     asm volatile(
-        "mov $5, %%rax\n\t"
+        "mov $4, %%rax\n\t"
         "syscall"
         : "=a"(ret), "=d"(payload)
         : "D"(addr), "S"(expected)
@@ -106,7 +106,7 @@ SyscallResult sys_futex_wake(uintptr_t addr, size_t count) {
     size_t ret;
     size_t payload;
     asm volatile(
-        "mov $6, %%rax\n\t"
+        "mov $5, %%rax\n\t"
         "syscall"
         : "=a"(ret), "=d"(payload)
         : "D"(addr), "S"(count)

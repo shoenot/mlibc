@@ -1,9 +1,10 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <stddef.h>
 #include <abi/flags.hpp>
 #include <new>
+
+using HandleID = uintptr_t;
 
 constexpr static const uintptr_t TAG_ARG_FILE_0 = 4096;
 
@@ -20,6 +21,26 @@ constexpr static const uintptr_t TAG_SYS_SOCKFAC = 8195;
 constexpr static const uintptr_t TAG_SYS_RES_MAN = 8196;
 
 constexpr static const uintptr_t TAG_SYS_CLOCK = 8197;
+
+constexpr static const uintptr_t TAG_SYS_MEMMAN = 8198;
+
+struct HandleGrant {
+    HandleID id;
+    AccessRights rights;
+    uintptr_t tag;
+};
+
+struct ProcessInitPackage {
+    HandleID self_handle;
+    HandleID root_handle;
+    HandleID source_handle;
+    HandleID sink_handle;
+    HandleGrant *extra_handles_ptr;
+    uintptr_t extra_handles_len;
+    uintptr_t argc;
+    const char **argv;
+    const char **envp;
+};
 
 enum class ThreadOp {
   ThreadOp_Kill,
@@ -117,6 +138,7 @@ struct FileOp {
     FileOp_Write,
     FileOp_Stat,
     FileOp_GetVmo,
+    FileOp_Seek,
   };
 
   struct FileOp_Read_Body {
@@ -131,10 +153,16 @@ struct FileOp {
     uintptr_t len;
   };
 
+  struct FileOp_Seek_Body {
+    int64_t offset;
+    uint32_t whence;
+  };
+
   Tag tag;
   union {
     FileOp_Read_Body read;
     FileOp_Write_Body write;
+    FileOp_Seek_Body seek;
   };
 };
 
@@ -181,6 +209,8 @@ struct ProcOp {
     ProcOp_Unmap,
     ProcOp_SpawnThread,
     ProcOp_SetFsBase,
+    ProcOp_InsertHandle,
+    ProcOp_Mprotect,
   };
 
   struct ProcOp_GetStatus_Body {
@@ -203,12 +233,25 @@ struct ProcOp {
     uintptr_t fs_base;
   };
 
+  struct ProcOp_InsertHandle_Body {
+    HandleID source_handle;
+    AccessRights rights;
+  };
+
+  struct ProcOp_Mprotect_Body {
+    uintptr_t vaddr;
+    uintptr_t len;
+    uintptr_t prot;
+  };
+
   Tag tag;
   union {
     ProcOp_GetStatus_Body get_status;
     ProcOp_Unmap_Body unmap;
     ProcOp_SpawnThread_Body spawn_thread;
     ProcOp_SetFsBase_Body set_fs_base;
+    ProcOp_InsertHandle_Body insert_handle;
+    ProcOp_Mprotect_Body mprotect;
   };
 };
 
@@ -247,6 +290,22 @@ struct MemManOp {
   Tag tag;
   union {
     MemManOp_CreatePool_Body create_pool;
+  };
+};
+
+struct BrokerOp {
+  enum class Tag {
+    BrokerOp_Connect,
+    BrokerOp_Accept,
+  };
+
+  struct BrokerOp_Connect_Body {
+    HandleID socket_to_give;
+  };
+
+  Tag tag;
+  union {
+    BrokerOp_Connect_Body connect;
   };
 };
 
@@ -343,6 +402,7 @@ struct Invocation {
     Invocation_Thread,
     Invocation_ProcessManager,
     Invocation_MemoryManager,
+    Invocation_Broker,
     Invocation_MemPool,
     Invocation_Clock,
     Invocation_Socket,
@@ -381,6 +441,10 @@ struct Invocation {
     MemManOp _0;
   };
 
+  struct Invocation_Broker_Body {
+    BrokerOp _0;
+  };
+
   struct Invocation_MemPool_Body {
     MemPoolOp _0;
   };
@@ -407,6 +471,7 @@ struct Invocation {
     Invocation_Thread_Body thread;
     Invocation_ProcessManager_Body process_manager;
     Invocation_MemoryManager_Body memory_manager;
+    Invocation_Broker_Body broker;
     Invocation_MemPool_Body mem_pool;
     Invocation_Clock_Body clock;
     Invocation_Socket_Body socket;
