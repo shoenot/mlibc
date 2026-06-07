@@ -6,14 +6,16 @@ inc = include_directories('include')
 
 rtld_sources += files(
     'generic/sysdeps.cpp',
-    'generic/syscall.cpp'
+    'generic/syscall.cpp',
+    'generic/helpers.cpp'
 )
 rtld_include_dirs += inc
 
 libc_sources += files(
     'generic/entry.cpp',
     'generic/syscall.cpp',
-    'generic/sysdeps.cpp'
+    'generic/sysdeps.cpp',
+    'generic/helpers.cpp'
 )
 libc_include_dirs += inc
 

@@ -1,8 +1,4 @@
-#include <stdint.h>
-#include <stddef.h>
-#include <abi/vespertine_abi.hpp>
-
-using HandleID = uintptr_t;
+#include "syscall.hpp"
 
 extern "C" {
 

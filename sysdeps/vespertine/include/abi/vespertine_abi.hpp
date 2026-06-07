@@ -1,10 +1,14 @@
+#pragma once
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <abi/flags.hpp>
+#include <abi-bits/termios.h>
 #include <new>
 
 using HandleID = uintptr_t;
+
+constexpr static const uintptr_t VESPER_MAGIC = 0xc001ca75; // cool cats
 
 constexpr static const uintptr_t TAG_ARG_FILE_0 = 4096;
 
@@ -42,6 +46,16 @@ struct ProcessInitPackage {
     uintptr_t argc;
     const char **argv;
     const char **envp;
+};
+
+struct PacketHeader {
+    uint32_t magic;
+    uint8_t version;
+    uint8_t _pad;
+    uint16_t packet_flags;
+    uint32_t packet_type;
+    uint32_t payload_len;
+    uint32_t reserved;
 };
 
 enum class ThreadOp {
@@ -338,12 +352,18 @@ struct ClockOp {
     ClockOp_Sleep,
   };
 
+  struct ClockOp_GetTimestamp_Body {
+    uintptr_t s_ptr;
+    uintptr_t ns_ptr;
+  };
+
   struct ClockOp_Sleep_Body {
     uintptr_t ns;
   };
 
   Tag tag;
   union {
+    ClockOp_GetTimestamp_Body get_timestamp;
     ClockOp_Sleep_Body sleep;
   };
 };
@@ -503,4 +523,21 @@ enum class SysError : size_t {
 struct SyscallResult {
     size_t value;
     SysError error;
+};
+
+struct TermCommand {
+  enum class Tag {
+    TermCommand_SetTermios,
+    TermCommand_GetTermios,
+    TermCommand_GetWindowSize,
+  };
+
+  struct TermCommand_SetTermios_Body {
+    termios _0;
+  };
+
+  Tag tag;
+  union {
+    TermCommand_SetTermios_Body set_termios;
+  };
 };

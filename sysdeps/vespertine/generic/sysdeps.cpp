@@ -1,11 +1,18 @@
 #include <mlibc/all-sysdeps.hpp>
 #include <abi/vespertine_abi.hpp>
 #include <abi/flags.hpp>
+#include <abi-bits/termios.h>
+#include <abi-bits/ioctls.h>
+#include "helpers.hpp"
+#include "mlibc/sysdep-tags.hpp"
+#include "syscall.hpp"
 #include <errno.h>
 #include <string.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <bits/ensure.h>
+
+static const ProcessInitPackage *g_init_pkg = nullptr;
 
 [[noreturn]] static inline int stub_called(const char *func) {
     (void)func;
@@ -25,20 +32,12 @@ struct FdTable {
 // --- globals ---
 HandleID g_self_handle = 1;
 HandleID g_root_handle = 0;
-HandleID g_mem_pool = 0;
-HandleID g_sink_handle = 3; // Default debug sink
+HandleID g_mem_pool = 0; HandleID g_sink_handle = 3; // Default debug sink
 
 #define STATIC_FD_BOOTSTRAP_CAP 256
 // Reserve slots 0, 1, 2 for stdio, and 3 for the internal debug sink
 static HandleID bootstrap_fds[STATIC_FD_BOOTSTRAP_CAP] = {0, 0, 0, 3};
 FdTable g_fd_table = { bootstrap_fds, STATIC_FD_BOOTSTRAP_CAP };
-
-extern "C" SyscallResult sys_invoke(HandleID handle, const void *op);
-extern "C" SyscallResult sys_close(HandleID handle);
-extern "C" SyscallResult sys_thread_terminate();
-extern "C" SyscallResult sys_thread_yield();
-extern "C" SyscallResult sys_futex_wait(uintptr_t addr, uint32_t expected);
-extern "C" SyscallResult sys_futex_wake(uintptr_t addr, size_t count);
 
 // --- error mapping ---
 int map_error(SysError err) {
@@ -53,6 +52,7 @@ int map_error(SysError err) {
         default:                        return ENOSYS;
     }
 }
+
 
 namespace mlibc {
 
@@ -131,6 +131,7 @@ static void debug_print_num(const char *prefix, size_t num) {
 
 static void ensure_handles();
 static HandleID resolve_path(const char *path);
+static HandleID find_tag(uintptr_t tag);
 
 // ----------------------------------------------------
 // 1. threading & panics
@@ -481,11 +482,179 @@ void Sysdeps<LibcPanic>::operator()() {
 // 4. stubs
 // ----------------------------------------------------
 
-int Sysdeps<Isatty>::operator()(int) {
+extern "C" [[gnu::weak]] uintptr_t *entryStack;
+
+int Sysdeps<Open>::operator()(const char *path, int flags, unsigned int mode, int *fd) {
+    (void)flags; (void)mode;
+
+    char local_path[256];
+    size_t i = 0;
+    while (path[i] && i < 255) {
+        local_path[i] = path[i];
+        i++;
+    }
+    local_path[i] = '\0';
+
+    ensure_handles();
+
+    HandleID file_handle = resolve_path(local_path);
+    if (file_handle == 0) {
+        return ENOENT;
+    }
+
+    for (size_t i = 3; i < g_fd_table.capacity; i++) {
+        if (g_fd_table.entries[i] == 0) {
+            g_fd_table.entries[i] = file_handle;
+            *fd = i;
+            return 0;
+        }
+    }
+
+    ::sys_close(file_handle);
+    return EMFILE;
+}
+
+int Sysdeps<ClockGet>::operator()(int clock, time_t *secs, long *nanos) {
+    (void)clock;
+    ensure_handles();
+    uintptr_t sys_clock = find_tag(TAG_SYS_CLOCK);
+    if (sys_clock == 0) return EPERM;
+
+    ClockOp::ClockOp_GetTimestamp_Body ts_body;
+    ts_body.s_ptr = reinterpret_cast<uintptr_t>(secs);
+    ts_body.ns_ptr = reinterpret_cast<uintptr_t>(nanos);
+
+    ClockOp op;
+    op.tag = ClockOp::Tag::ClockOp_GetTimestamp;
+    op.get_timestamp = ts_body;
+
+    Invocation inv;
+    inv.tag = Invocation::Tag::Invocation_Clock;
+    inv.clock._0 = op;
+
+    SyscallResult res = sys_invoke(sys_clock, &inv);
+    if (res.error == SysError::UnsupportedOperation) return ESPIPE; 
+    if (res.error != SysError::Success) return map_error(res.error);
+
     return 0;
 }
 
-extern "C" [[gnu::weak]] uintptr_t *entryStack;
+int Sysdeps<Tcgetattr>::operator()(int fd, struct termios *attr) {
+    (void)fd;
+    ensure_handles();
+    uintptr_t g_term_ctrl = find_tag(TAG_APP_TERM);
+    if (g_term_ctrl == 0) return ENOTTY;
+
+    TermCommand cmd{};
+    cmd.tag = TermCommand::Tag::TermCommand_GetTermios;
+
+    SysError e = ctrl_send(g_term_ctrl, cmd);
+    if (e != SysError::Success) return map_error(e);
+
+    termios t{};
+    e = ctrl_recv(g_term_ctrl, &t);
+    if (e != SysError::Success) return map_error(e);
+
+    attr->c_iflag  = t.c_iflag;
+    attr->c_oflag  = t.c_oflag;
+    attr->c_cflag  = t.c_cflag;
+    attr->c_lflag  = t.c_lflag;
+    attr->c_line   = t.c_line;
+    memcpy(attr->c_cc, t.c_cc, sizeof(t.c_cc));
+    attr->c_ibaud = t.c_ibaud;
+    attr->c_obaud = t.c_obaud;
+    return 0;
+}
+
+int Sysdeps<Tcsetattr>::operator()(int fd, int optional_actions, const struct termios *attr) {
+    (void)fd; (void)optional_actions;
+    ensure_handles();
+    uintptr_t g_term_ctrl = find_tag(TAG_APP_TERM);
+    if (g_term_ctrl == 0) return ENOTTY;
+
+    TermCommand cmd{};
+    cmd.tag = TermCommand::Tag::TermCommand_SetTermios;
+    cmd.set_termios._0.c_iflag  = attr->c_iflag;
+    cmd.set_termios._0.c_oflag  = attr->c_oflag;
+    cmd.set_termios._0.c_cflag  = attr->c_cflag;
+    cmd.set_termios._0.c_lflag  = attr->c_lflag;
+    cmd.set_termios._0.c_line   = attr->c_line;
+    memcpy(cmd.set_termios._0.c_cc, attr->c_cc, sizeof(cmd.set_termios._0.c_cc));
+    cmd.set_termios._0.c_ibaud = attr->c_ibaud;
+    cmd.set_termios._0.c_obaud = attr->c_obaud;
+
+    SysError e = ctrl_send(g_term_ctrl, cmd);
+    return map_error(e);
+    // no response expected for SetTermios
+}
+
+int Sysdeps<Tcgetwinsize>::operator()(int fd, struct winsize *winsz) {
+    (void)fd;
+    ensure_handles();
+    uintptr_t g_term_ctrl = find_tag(TAG_APP_TERM);
+    if (g_term_ctrl == 0) return ENOTTY;
+
+    TermCommand cmd{};
+    cmd.tag = TermCommand::Tag::TermCommand_GetWindowSize;
+
+    SysError e = ctrl_send(g_term_ctrl, cmd);
+    if (e != SysError::Success) return map_error(e);
+
+    // terminal responds with send_packet::<(u32, u32)> — cols then rows
+    struct { uint32_t cols; uint32_t rows; } size{};
+    e = ctrl_recv(g_term_ctrl, &size);
+    if (e != SysError::Success) return map_error(e);
+
+    // width/height returned as chars 
+    winsz->ws_row    = static_cast<unsigned short>(size.rows);
+    winsz->ws_col    = static_cast<unsigned short>(size.cols);
+    winsz->ws_xpixel = static_cast<unsigned short>(size.cols * 8);   
+    winsz->ws_ypixel = static_cast<unsigned short>(size.rows * 16);  
+    return 0;
+}
+
+int Sysdeps<Isatty>::operator()(int fd) {
+    ensure_handles();
+    uintptr_t g_term_ctrl = find_tag(TAG_APP_TERM);
+    if (g_term_ctrl != 0 && (fd == 0 || fd == 1 || fd == 2))
+        return 1;
+    return 0;
+}
+
+int Sysdeps<Ioctl>::operator()(int fd, unsigned long request, void *arg, int *result) {
+    (void)fd;
+    ensure_handles();
+
+    if (request == TIOCGWINSZ) {
+        struct winsize *ws = static_cast<struct winsize *>(arg);
+        if (!ws) return EINVAL;
+        uintptr_t g_term_ctrl = find_tag(TAG_APP_TERM);
+        if (g_term_ctrl == 0) return ENOTTY;
+
+        TermCommand cmd{};
+        cmd.tag = TermCommand::Tag::TermCommand_GetWindowSize;
+
+        SysError e = ctrl_send(g_term_ctrl, cmd);
+        if (e != SysError::Success) return map_error(e);
+
+        struct { uint32_t cols; uint32_t rows; } size{};
+        e = ctrl_recv(g_term_ctrl, &size);
+        if (e != SysError::Success) return map_error(e);
+
+        ws->ws_col    = static_cast<unsigned short>(size.cols);
+        ws->ws_row    = static_cast<unsigned short>(size.rows);
+        ws->ws_xpixel = static_cast<unsigned short>(size.cols * 8);
+        ws->ws_ypixel = static_cast<unsigned short>(size.rows * 16);
+        if (result) *result = 0;
+        return 0;
+    }
+
+    return ENOSYS;
+}
+
+// ----------------------------------------------------
+// 5. helpers
+// ----------------------------------------------------
 
 static void ensure_handles() {
     static bool pool_initialized = false;
@@ -535,6 +704,7 @@ static void ensure_handles() {
         }
         auto *pkg = reinterpret_cast<ProcessInitPackage *>(&auxv[i + 1]);
         if (pkg) {
+            g_init_pkg = pkg;
             g_self_handle = pkg->self_handle;
             g_root_handle = pkg->root_handle;
             g_sink_handle = pkg->sink_handle;
@@ -596,41 +766,15 @@ static HandleID resolve_path(const char *path) {
     return curr;
 }
 
-int Sysdeps<Open>::operator()(const char *path, int flags, unsigned int mode, int *fd) {
-    (void)flags; (void)mode;
-
-    char local_path[256];
-    size_t i = 0;
-    while (path[i] && i < 255) {
-        local_path[i] = path[i];
-        i++;
-    }
-    local_path[i] = '\0';
-
-    ensure_handles();
-
-    HandleID file_handle = resolve_path(local_path);
-    if (file_handle == 0) {
-        return ENOENT;
-    }
-
-    for (size_t i = 3; i < g_fd_table.capacity; i++) {
-        if (g_fd_table.entries[i] == 0) {
-            g_fd_table.entries[i] = file_handle;
-            *fd = i;
-            return 0;
+static HandleID find_tag(uintptr_t tag) {
+    if (!g_init_pkg) return 0;
+    for (size_t i = 0; i < g_init_pkg->extra_handles_len; i++) {
+        if (g_init_pkg->extra_handles_ptr[i].tag == tag) {
+            return g_init_pkg->extra_handles_ptr[i].id;
         }
     }
-
-    ::sys_close(file_handle);
-    return EMFILE;
+    return 0;
 }
-
-int Sysdeps<ClockGet>::operator()(int, time_t *, long *) {
-    STUB();
-}
-
-
 
 } // namespace mlibc
 

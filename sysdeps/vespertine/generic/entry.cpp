@@ -4,9 +4,7 @@
 #include <stddef.h>
 #include <mlibc/sysdeps.hpp>
 #include <abi/vespertine_abi.hpp>
-
-extern "C" SyscallResult sys_invoke(HandleID handle, const void *op);
-extern "C" SyscallResult sys_close(HandleID handle);
+#include "syscall.hpp"
 
 struct BrokerRequest {
     uintptr_t tag;
@@ -66,7 +64,7 @@ static HandleID sys_lookup(HandleID dir, const char *name) {
     inv.directory._0 = dir_op;
 
     SyscallResult res = sys_invoke(dir, &inv);
-    if (res.error != 0) {
+    if (res.error != SysError::Success) {
         return 0;
     }
     return res.value;
@@ -147,7 +145,7 @@ extern "C" void __mlibc_entry(uintptr_t *stack) {
                     inv.broker._0.connect.socket_to_give = 0;
 
                     SyscallResult conn_res = sys_invoke(broker, &inv);
-                    if (conn_res.error == 0) {
+                    if (conn_res.error == SysError::Success) {
                         HandleID conn_sock = conn_res.value;
 
                         // Query for the Memory Manager (TAG_SYS_MEMMAN = 0x2006)
@@ -155,10 +153,10 @@ extern "C" void __mlibc_entry(uintptr_t *stack) {
                         req.tag = 0x2006;
 
                         SyscallResult wr_res = sys_write(conn_sock, &req, sizeof(req));
-                        if (wr_res.error == 0) {
+                        if (wr_res.error == SysError::Success) {
                             BrokerResponse resp;
                             SyscallResult rd_res = sys_read(conn_sock, &resp, sizeof(resp));
-                            if (rd_res.error == 0 && resp.handle != 0) {
+                            if (rd_res.error == SysError::Success && resp.handle != 0) {
                                 HandleID mem_man = resp.handle;
 
                                 // Create the private memory pool
@@ -174,7 +172,7 @@ extern "C" void __mlibc_entry(uintptr_t *stack) {
                                 mem_inv.memory_manager._0 = op;
 
                                 SyscallResult res = sys_invoke(mem_man, &mem_inv);
-                                if (res.error == 0) { 
+                                if (res.error == SysError::Success) { 
                                     g_mem_pool = res.value;
                                 }
                                 sys_close(mem_man);
@@ -200,7 +198,7 @@ extern "C" void __mlibc_entry(uintptr_t *stack) {
                         mem_inv.memory_manager._0 = op;
 
                         SyscallResult res = sys_invoke(mem_man, &mem_inv);
-                        if (res.error == 0) { 
+                        if (res.error == SysError::Success) { 
                             g_mem_pool = res.value;
                         }
                         sys_close(mem_man);
