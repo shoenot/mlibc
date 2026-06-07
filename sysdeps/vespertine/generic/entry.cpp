@@ -5,11 +5,6 @@
 #include <mlibc/sysdeps.hpp>
 #include <abi/vespertine_abi.hpp>
 
-struct SysError; 
-struct SyscallResult {
-    size_t value;
-    size_t error; 
-};
 extern "C" SyscallResult sys_invoke(HandleID handle, const void *op);
 extern "C" SyscallResult sys_close(HandleID handle);
 
