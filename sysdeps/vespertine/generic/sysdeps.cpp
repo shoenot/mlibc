@@ -398,6 +398,11 @@ int Sysdeps<Write>::operator()(int fd, const void *buf, size_t count, ssize_t *b
     inv.file._0 = file_op;
 
     SyscallResult res = sys_invoke(handle, &inv);
+    if (res.error == SysError::InvalidArgument || res.error == SysError::UnsupportedOperation) {
+        inv.file._0.write.offset = 0;
+        res = sys_invoke(handle, &inv);
+    }
+
     if (res.error != SysError::Success) return map_error(res.error);
 
     *bytes_written = res.value;
@@ -423,6 +428,11 @@ int Sysdeps<Read>::operator()(int fd, void *buf, size_t count, ssize_t *bytes_re
     inv.file._0 = file_op;
 
     SyscallResult res = sys_invoke(handle, &inv);
+    if (res.error == SysError::InvalidArgument || res.error == SysError::UnsupportedOperation) {
+        inv.file._0.read.offset = 0;
+        res = sys_invoke(handle, &inv);
+    }
+
     if (res.error != SysError::Success) return map_error(res.error);
 
     *bytes_read = res.value;
