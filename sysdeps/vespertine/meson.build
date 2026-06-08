@@ -1,5 +1,6 @@
 sysdep_supported_options = {
   'posix': true,
+  'glibc': true,
 }
 
 inc = include_directories('include')

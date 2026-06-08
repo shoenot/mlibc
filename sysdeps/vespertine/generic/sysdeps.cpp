@@ -617,8 +617,8 @@ int Sysdeps<Isatty>::operator()(int fd) {
     ensure_handles();
     uintptr_t g_term_ctrl = find_tag(TAG_APP_TERM);
     if (g_term_ctrl != 0 && (fd == 0 || fd == 1 || fd == 2))
-        return 1;
-    return 0;
+        return 0; // 0 = Success (Is a TTY)
+    return ENOTTY; // Error (Not a TTY)
 }
 
 int Sysdeps<Ioctl>::operator()(int fd, unsigned long request, void *arg, int *result) {
