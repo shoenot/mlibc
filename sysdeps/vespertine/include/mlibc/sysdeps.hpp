@@ -8,6 +8,7 @@ namespace mlibc {
 struct VespertineSysdepTags :
     LibcPanic,
     LibcLog,
+    Sigaction,
     Isatty,
     Write,
     TcbSet,
@@ -20,6 +21,7 @@ struct VespertineSysdepTags :
     FutexWait,
     Read,
     Open,
+    Ftruncate,
     VmMap,
     VmUnmap,
     VmProtect,

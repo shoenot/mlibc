@@ -10,8 +10,8 @@
 #include <string.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <signal.h>
 #include <bits/ensure.h>
-
 static const ProcessInitPackage *g_init_pkg = nullptr;
 
 [[noreturn]] static inline int stub_called(const char *func) {
@@ -35,8 +35,8 @@ HandleID g_root_handle = 0;
 HandleID g_mem_pool = 0; HandleID g_sink_handle = 3; // Default debug sink
 
 #define STATIC_FD_BOOTSTRAP_CAP 256
-// Reserve slots 0, 1, 2 for stdio, and 3 for the internal debug sink
-static HandleID bootstrap_fds[STATIC_FD_BOOTSTRAP_CAP] = {0, 0, 0, 3};
+// Reserve slots 0, 1, 2 for stdio
+static HandleID bootstrap_fds[STATIC_FD_BOOTSTRAP_CAP] = {0, 0, 0};
 FdTable g_fd_table = { bootstrap_fds, STATIC_FD_BOOTSTRAP_CAP };
 
 // --- error mapping ---
@@ -132,6 +132,33 @@ static void debug_print_num(const char *prefix, size_t num) {
 static void ensure_handles();
 static HandleID resolve_path(const char *path);
 static HandleID find_tag(uintptr_t tag);
+static char *find_last_char(char *string, char character);
+
+static ProcessInitPackage *find_init_package(uintptr_t *stack) {
+      if (!stack)
+          return nullptr;
+
+      size_t argc = stack[0];
+      size_t env_idx = 1 + argc + 1;
+
+      while (stack[env_idx])
+          env_idx++;
+
+      struct AuxEntry {
+          uintptr_t type;
+          uintptr_t val;
+      };
+
+      auto *auxv = reinterpret_cast<AuxEntry *>(&stack[env_idx + 1]);
+
+      for (size_t i = 0; auxv[i].type != 0; i++) {
+          if (auxv[i].type == AT_VESPERTINE_INITPKG) {
+              return reinterpret_cast<ProcessInitPackage *>(auxv[i].val);
+          }
+      }
+
+      return nullptr;
+  }
 
 // ----------------------------------------------------
 // 1. threading & panics
@@ -492,36 +519,158 @@ void Sysdeps<LibcPanic>::operator()() {
 // 4. stubs
 // ----------------------------------------------------
 
+int Sysdeps<Sigaction>::operator()(
+      int signal,
+      const struct sigaction *action,
+      struct sigaction *old_action) {
+  if (signal <= 0 || signal >= _NSIG)
+      return EINVAL;
+
+  // STUBBED
+  if (old_action) {
+      memset(old_action, 0, sizeof(*old_action));
+      old_action->sa_handler = SIG_DFL;
+  }
+
+  (void)action;
+  return 0;
+}
+
 extern "C" [[gnu::weak]] uintptr_t *entryStack;
 
-int Sysdeps<Open>::operator()(const char *path, int flags, unsigned int mode, int *fd) {
-    (void)flags; (void)mode;
-
-    char local_path[256];
-    size_t i = 0;
-    while (path[i] && i < 255) {
-        local_path[i] = path[i];
-        i++;
-    }
-    local_path[i] = '\0';
-
+int Sysdeps<Open>::operator()(
+        const char *path,
+        int flags,
+        unsigned int mode,
+        int *fd) {
+    (void)mode;
     ensure_handles();
-
+    
+    if (!path || !*path || !fd)
+        return EINVAL;
+    
+    char local_path[256];
+    size_t length = strlen(path);
+    
+    if (length >= sizeof(local_path))
+        return ENAMETOOLONG;
+    
+    memcpy(local_path, path, length + 1);
+    
     HandleID file_handle = resolve_path(local_path);
-    if (file_handle == 0) {
-        return ENOENT;
+    
+    if (file_handle != 0) {
+        // O_CREAT | O_EXCL must fail when the file already exists.
+        if ((flags & O_CREAT) && (flags & O_EXCL)) {
+            ::sys_close(file_handle);
+            return EEXIST;
+        }
+    } else {
+        if (!(flags & O_CREAT))
+            return ENOENT;
+    
+        // Split path into parent directory and final filename.
+        char *last_slash = find_last_char(local_path, '/');
+        const char *filename = local_path;
+        HandleID parent_handle = g_root_handle;
+    
+        if (last_slash) {
+            filename = last_slash + 1;
+    
+            if (!*filename)
+                return EINVAL;
+    
+            if (last_slash != local_path) {
+                *last_slash = '\0';
+                parent_handle = resolve_path(local_path);
+    
+                if (parent_handle == 0)
+                    return ENOENT;
+            }
+            // If last_slash == local_path, this is "/file", whose parent is root.
+        }
+    
+        DirectoryOp dir_op;
+        dir_op.tag = DirectoryOp::Tag::DirectoryOp_CreateFile;
+        dir_op.create_file.name =
+            reinterpret_cast<uintptr_t>(filename);
+        dir_op.create_file.name_len = strlen(filename);
+    
+        Invocation invocation;
+        invocation.tag = Invocation::Tag::Invocation_Directory;
+        invocation.directory._0 = dir_op;
+    
+        SyscallResult result = ::sys_invoke(parent_handle, &invocation);
+    
+        if (parent_handle != g_root_handle)
+            ::sys_close(parent_handle);
+    
+        if (result.error != SysError::Success) {
+            // The kernel reports an existing filename as InvalidArgument.
+            if (result.error == SysError::InvalidArgument)
+                return EEXIST;
+    
+            return map_error(result.error);
+        }
+    
+        file_handle = result.value;
     }
 
-    for (size_t i = 3; i < g_fd_table.capacity; i++) {
-        if (g_fd_table.entries[i] == 0) {
-            g_fd_table.entries[i] = file_handle;
-            *fd = i;
+
+    if (flags & O_TRUNC) {
+        int access_mode = flags & O_ACCMODE;
+        if (access_mode != O_WRONLY && access_mode != O_RDWR) {
+            ::sys_close(file_handle);
+            return EINVAL;
+        }
+    
+        FileOp file_op;
+        file_op.tag = FileOp::Tag::FileOp_Truncate;
+        file_op.truncate.size = 0;
+    
+        Invocation invocation;
+        invocation.tag = Invocation::Tag::Invocation_File;
+        invocation.file._0 = file_op;
+    
+        SyscallResult result = ::sys_invoke(file_handle, &invocation);
+        if (result.error != SysError::Success) {
+            ::sys_close(file_handle);
+            return map_error(result.error);
+        }
+    }
+    
+    for (size_t candidate = 3;
+            candidate < g_fd_table.capacity;
+            candidate++) {
+        if (g_fd_table.entries[candidate] == 0) {
+            g_fd_table.entries[candidate] = file_handle;
+            *fd = static_cast<int>(candidate);
             return 0;
         }
     }
-
+    
     ::sys_close(file_handle);
     return EMFILE;
+}
+
+int Sysdeps<Ftruncate>::operator()(int fd, size_t size) {
+    if (fd < 0 || static_cast<size_t>(fd) >= g_fd_table.capacity)
+        return EBADF;
+
+    HandleID handle = g_fd_table.entries[fd];
+    if (handle == 0)
+        return EBADF;
+
+    FileOp file_op;
+    file_op.tag = FileOp::Tag::FileOp_Truncate;
+    file_op.truncate.size = size;
+
+    Invocation invocation;
+    invocation.tag = Invocation::Tag::Invocation_File;
+    invocation.file._0 = file_op;
+
+    SyscallResult result = ::sys_invoke(handle, &invocation);
+    return map_error(result.error);
 }
 
 int Sysdeps<ClockGet>::operator()(int clock, time_t *secs, long *nanos) {
@@ -611,15 +760,22 @@ int Sysdeps<Tcgetwinsize>::operator()(int fd, struct winsize *winsz) {
     if (e != SysError::Success) return map_error(e);
 
     // terminal responds with send_packet::<(u32, u32)> — cols then rows
-    struct { uint32_t cols; uint32_t rows; } size{};
+    struct TerminalWinSize {
+        uint16_t rows;
+        uint16_t cols;
+        uint16_t xpixel;
+        uint16_t ypixel;
+    } size{};
+    
     e = ctrl_recv(g_term_ctrl, &size);
-    if (e != SysError::Success) return map_error(e);
+    if (e != SysError::Success)
+        return map_error(e);
+    
+    winsz->ws_row = size.rows;
+    winsz->ws_col = size.cols;
+    winsz->ws_xpixel = size.xpixel;
+    winsz->ws_ypixel = size.ypixel;
 
-    // width/height returned as chars 
-    winsz->ws_row    = static_cast<unsigned short>(size.rows);
-    winsz->ws_col    = static_cast<unsigned short>(size.cols);
-    winsz->ws_xpixel = static_cast<unsigned short>(size.cols * 8);   
-    winsz->ws_ypixel = static_cast<unsigned short>(size.rows * 16);  
     return 0;
 }
 
@@ -636,8 +792,7 @@ int Sysdeps<Ioctl>::operator()(int fd, unsigned long request, void *arg, int *re
     ensure_handles();
 
     if (request == TIOCGWINSZ) {
-        struct winsize *ws = static_cast<struct winsize *>(arg);
-        if (!ws) return EINVAL;
+        struct winsize *winsz = static_cast<struct winsize *>(arg);
         uintptr_t g_term_ctrl = find_tag(TAG_APP_TERM);
         if (g_term_ctrl == 0) return ENOTTY;
 
@@ -647,15 +802,23 @@ int Sysdeps<Ioctl>::operator()(int fd, unsigned long request, void *arg, int *re
         SysError e = ctrl_send(g_term_ctrl, cmd);
         if (e != SysError::Success) return map_error(e);
 
-        struct { uint32_t cols; uint32_t rows; } size{};
+        // terminal responds with send_packet::<(u32, u32)> — cols then rows
+        struct TerminalWinSize {
+            uint16_t rows;
+            uint16_t cols;
+            uint16_t xpixel;
+            uint16_t ypixel;
+        } size{};
+        
         e = ctrl_recv(g_term_ctrl, &size);
-        if (e != SysError::Success) return map_error(e);
+        if (e != SysError::Success)
+            return map_error(e);
+        
+        winsz->ws_row = size.rows;
+        winsz->ws_col = size.cols;
+        winsz->ws_xpixel = size.xpixel;
+        winsz->ws_ypixel = size.ypixel;
 
-        ws->ws_col    = static_cast<unsigned short>(size.cols);
-        ws->ws_row    = static_cast<unsigned short>(size.rows);
-        ws->ws_xpixel = static_cast<unsigned short>(size.cols * 8);
-        ws->ws_ypixel = static_cast<unsigned short>(size.rows * 16);
-        if (result) *result = 0;
         return 0;
     }
 
@@ -670,7 +833,7 @@ static void ensure_handles() {
     static bool pool_initialized = false;
     static bool stack_initialized = false;
 
-    // 1. Initialize the memory pool as early as possible.
+    // initialize the memory pool as early as possible.
     if (!pool_initialized && g_mem_pool == 0) {
         HandleID mem_man = resolve_path("/System/Services/MemoryManager");
         if (mem_man != 0) {
@@ -694,37 +857,23 @@ static void ensure_handles() {
         }
     }
 
-    // 2. Initialize stack-dependent handles once entryStack is populated by the runtime.
+    // initialize stack-dependent handles once entrystack is populated by the runtime.
     if (!stack_initialized && &entryStack && entryStack) {
-        uintptr_t *stack = entryStack;
-        size_t argc = stack[0];
-        size_t env_idx = 1 + argc + 1;
-        while (stack[env_idx]) {
-            env_idx++;
-        }
-        size_t aux_idx = env_idx + 1;
-        struct AuxEntry {
-            uintptr_t type;
-            uintptr_t val;
-        };
-        AuxEntry *auxv = reinterpret_cast<AuxEntry *>(&stack[aux_idx]);
-        size_t i = 0;
-        while (auxv[i].type != 0) {
-            i++;
-        }
-        auto *pkg = reinterpret_cast<ProcessInitPackage *>(&auxv[i + 1]);
+        ProcessInitPackage *pkg = find_init_package(entryStack);
+
         if (pkg) {
             g_init_pkg = pkg;
             g_self_handle = pkg->self_handle;
             g_root_handle = pkg->root_handle;
             g_sink_handle = pkg->sink_handle;
-            g_fd_table.entries[0] = pkg->source_handle; // STDIN_FILENO
-            g_fd_table.entries[1] = pkg->sink_handle;   // STDOUT_FILENO
-            g_fd_table.entries[2] = pkg->sink_handle;   // STDERR_FILENO
-            g_fd_table.entries[3] = pkg->sink_handle;   // Reserve slot 3
+
+            g_fd_table.entries[STDIN_FILENO] = pkg->source_handle;
+            g_fd_table.entries[STDOUT_FILENO] = pkg->sink_handle;
+            g_fd_table.entries[STDERR_FILENO] = pkg->sink_handle;
         }
+
         stack_initialized = true;
-    }
+  }
 }
 
 static HandleID resolve_path(const char *path) {
@@ -784,6 +933,17 @@ static HandleID find_tag(uintptr_t tag) {
         }
     }
     return 0;
+}
+
+static char *find_last_char(char *string, char character) {
+  char *last = nullptr;
+
+  for (; *string; ++string) {
+      if (*string == character)
+          last = string;
+  }
+
+  return last;
 }
 
 } // namespace mlibc

@@ -8,6 +8,8 @@
 
 using HandleID = uintptr_t;
 
+constexpr static const uintptr_t AT_VESPERTINE_INITPKG = 0x6fff0001;
+
 constexpr static const uintptr_t VESPER_MAGIC = 0xc001ca75; // cool cats
 
 constexpr static const uintptr_t TAG_ARG_FILE_0 = 4096;
@@ -155,6 +157,7 @@ struct FileOp {
     FileOp_Stat,
     FileOp_GetVmo,
     FileOp_Seek,
+    FileOp_Truncate,
   };
 
   struct FileOp_Read_Body {
@@ -174,11 +177,16 @@ struct FileOp {
     uint32_t whence;
   };
 
+  struct FileOp_Truncate_Body {
+    uintptr_t size;
+  };
+
   Tag tag;
   union {
     FileOp_Read_Body read;
     FileOp_Write_Body write;
     FileOp_Seek_Body seek;
+    FileOp_Truncate_Body truncate;
   };
 };
 

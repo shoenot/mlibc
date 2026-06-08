@@ -70,12 +70,39 @@ static HandleID sys_lookup(HandleID dir, const char *name) {
     return res.value;
 }
 
+struct AuxEntry {
+    uintptr_t type;
+    uintptr_t val;
+};
+
+static ProcessInitPackage *find_init_package(uintptr_t *stack) {
+    if (!stack)
+        return nullptr;
+
+    size_t argc = stack[0];
+    size_t env_idx = 1 + argc + 1;
+
+    while (stack[env_idx])
+        env_idx++;
+
+    auto *auxv = reinterpret_cast<AuxEntry *>(&stack[env_idx + 1]);
+
+    for (size_t i = 0; auxv[i].type != 0; i++) {
+        if (auxv[i].type == AT_VESPERTINE_INITPKG) {
+            return reinterpret_cast<ProcessInitPackage *>(auxv[i].val);
+        }
+    }
+
+    return nullptr;
+}
+
 #define STATIC_FD_BOOTSTRAP_CAP 256
 
 struct FdTable {
     HandleID *entries;
     size_t capacity;
 };
+
 
 extern HandleID g_self_handle;
 extern HandleID g_root_handle;
@@ -107,7 +134,8 @@ extern "C" void __mlibc_entry(uintptr_t *stack) {
 
     entryStack = stack;
 
-    ProcessInitPackage *pkg = nullptr;
+    ProcessInitPackage *pkg = find_init_package(stack);
+
     if (stack) {
         size_t argc = stack[0];
         size_t env_idx = 1 + argc + 1;
@@ -124,7 +152,6 @@ extern "C" void __mlibc_entry(uintptr_t *stack) {
         while (auxv[i].type != 0) {
             i++;
         }
-        pkg = reinterpret_cast<ProcessInitPackage *>(&auxv[i + 1]);
     }
 
     if (pkg) {
@@ -225,26 +252,15 @@ extern "C" void __mlibc_entry(uintptr_t *stack) {
         }
     }
 
-    size_t fake_stack_len = 1 + argc + 1 + envc + 1 + 2 + (sizeof(ProcessInitPackage) / sizeof(uintptr_t));
+    size_t fake_stack_len = 1 + argc + 1 + envc + 1 + 4;
     uintptr_t *fake_stack = (uintptr_t *)__builtin_alloca(fake_stack_len * sizeof(uintptr_t));
 
-    fake_stack[0] = argc;
-    for (size_t i = 0; i < argc; i++) {
-        fake_stack[1 + i] = reinterpret_cast<uintptr_t>(pkg->argv[i]);
-    }
-    fake_stack[1 + argc] = 0; // argv terminator
+    size_t aux_idx = 1 + argc + 1 + envc + 1;
 
-    for (size_t i = 0; i < envc; i++) {
-        fake_stack[1 + argc + 1 + i] = reinterpret_cast<uintptr_t>(pkg->envp[i]);
-    }
-    fake_stack[1 + argc + 1 + envc] = 0; // envp terminator
-    fake_stack[1 + argc + 1 + envc + 1] = 0; // aux vector terminator type = 0
-    fake_stack[1 + argc + 1 + envc + 2] = 0; // aux vector terminator val = 0
-
-    if (pkg) {
-        auto *inline_pkg = reinterpret_cast<ProcessInitPackage *>(&fake_stack[1 + argc + 1 + envc + 3]);
-        *inline_pkg = *pkg;
-    }
+    fake_stack[aux_idx + 0] = AT_VESPERTINE_INITPKG;
+    fake_stack[aux_idx + 1] = reinterpret_cast<uintptr_t>(pkg);
+    fake_stack[aux_idx + 2] = 0; // AT_NULL
+    fake_stack[aux_idx + 3] = 0;
 
     // call __dlapi_enter to initialize tls and tcb
     __dlapi_enter(fake_stack);
