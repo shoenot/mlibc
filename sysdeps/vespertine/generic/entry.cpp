@@ -89,6 +89,8 @@ extern "C" uintptr_t *__dlapi_entrystack();
 
 extern "C" int main(int argc, char **argv, char **envp);
 
+extern "C" uintptr_t *entryStack = nullptr;
+
 extern "C" void __mlibc_entry(uintptr_t *stack) {
     // When dynamically linked, ld.so's interpreterMain() already consumed
     // the original kernel-provided stack and saved it internally. The %rsp
@@ -102,6 +104,8 @@ extern "C" void __mlibc_entry(uintptr_t *stack) {
     if (original) {
         stack = original;
     }
+
+    entryStack = stack;
 
     ProcessInitPackage *pkg = nullptr;
     if (stack) {

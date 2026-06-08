@@ -48,14 +48,14 @@ struct ProcessInitPackage {
     const char **envp;
 };
 
-struct PacketHeader {
+struct alignas(8) PacketHeader {
     uint32_t magic;
-    uint8_t version;
-    uint8_t _pad;
+    uint16_t version;
     uint16_t packet_flags;
     uint32_t packet_type;
     uint32_t payload_len;
     uint32_t reserved;
+    uint32_t _pad;
 };
 
 enum class ThreadOp {
