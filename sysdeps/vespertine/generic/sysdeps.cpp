@@ -30,9 +30,10 @@ struct FdTable {
 };
 
 // --- globals ---
-HandleID g_self_handle = 1;
 HandleID g_root_handle = 0;
-HandleID g_mem_pool = 0; HandleID g_sink_handle = 3; // Default debug sink
+HandleID g_self_handle = 1;
+HandleID g_sink_handle = 3; // Default debug sink
+HandleID g_mem_pool = VESPERTINE_HANDLE_MEMORY_POOL; 
 
 #define STATIC_FD_BOOTSTRAP_CAP 256
 // Reserve slots 0, 1, 2 for stdio
@@ -135,30 +136,93 @@ static HandleID find_tag(uintptr_t tag);
 static char *find_last_char(char *string, char character);
 
 static ProcessInitPackage *find_init_package(uintptr_t *stack) {
-      if (!stack)
-          return nullptr;
+    if (!stack)
+        return nullptr;
 
-      size_t argc = stack[0];
-      size_t env_idx = 1 + argc + 1;
+    size_t argc = stack[0];
+    size_t env_idx = 1 + argc + 1;
 
-      while (stack[env_idx])
-          env_idx++;
+    while (stack[env_idx])
+        env_idx++;
 
-      struct AuxEntry {
-          uintptr_t type;
-          uintptr_t val;
-      };
+    struct AuxEntry {
+        uintptr_t type;
+        uintptr_t val;
+    };
 
-      auto *auxv = reinterpret_cast<AuxEntry *>(&stack[env_idx + 1]);
+    auto *auxv = reinterpret_cast<AuxEntry *>(&stack[env_idx + 1]);
 
-      for (size_t i = 0; auxv[i].type != 0; i++) {
-          if (auxv[i].type == AT_VESPERTINE_INITPKG) {
-              return reinterpret_cast<ProcessInitPackage *>(auxv[i].val);
-          }
-      }
+    for (size_t i = 0; auxv[i].type != 0; i++) {
+        if (auxv[i].type == AT_VESPERTINE_INITPKG) {
+            return reinterpret_cast<ProcessInitPackage *>(auxv[i].val);
+        }
+    }
 
-      return nullptr;
-  }
+    return nullptr;
+}
+
+
+static int allocate_vmo(size_t size, HandleID *out) {
+    MemPoolOp op{};
+    op.tag = MemPoolOp::Tag::MemPoolOp_AllocateVmo;
+    op.allocate_vmo.size = size;
+
+    Invocation inv{};
+    inv.tag = Invocation::Tag::Invocation_MemPool;
+    inv.mem_pool._0 = op;
+
+    SyscallResult result = sys_invoke(g_mem_pool, &inv);
+    if (result.error != SysError::Success)
+        return map_error(result.error);
+
+    *out = result.value;
+    return 0;
+}
+
+static constexpr uintptr_t VM_FLAG_WRITE = 1 << 0;
+static constexpr uintptr_t VM_FLAG_EXEC  = 1 << 1;
+static constexpr uintptr_t VM_FLAG_USER  = 1 << 2;
+static constexpr uintptr_t VM_FLAG_NO_ACCESS = 1 << 7;
+
+static uintptr_t convert_prot(int prot) {
+    uintptr_t vm_flags = VM_FLAG_USER;
+
+    if (prot == PROT_NONE)
+        return vm_flags | VM_FLAG_NO_ACCESS;
+
+    if (prot & PROT_WRITE)
+        vm_flags |= VM_FLAG_WRITE;
+
+    if (prot & PROT_EXEC)
+        vm_flags |= VM_FLAG_EXEC;
+
+    return vm_flags;
+}
+
+static int map_vmo(
+    HandleID vmo,
+    void *hint,
+    size_t size,
+    int prot,
+    void **out
+) {
+    VmoOp op{};
+    op.tag = VmoOp::Tag::VmoOp_MapIntoProc;
+    op.map_into_proc.vaddr = reinterpret_cast<uintptr_t>(hint);
+    op.map_into_proc.len = size;
+    op.map_into_proc.vm_flags = convert_prot(prot);
+
+    Invocation inv{};
+    inv.tag = Invocation::Tag::Invocation_Vmo;
+    inv.vmo._0 = op;
+
+    SyscallResult result = sys_invoke(vmo, &inv);
+    if (result.error != SysError::Success)
+        return map_error(result.error);
+
+    *out = reinterpret_cast<void *>(result.value);
+    return 0;
+}
 
 // ----------------------------------------------------
 // 1. threading & panics
@@ -213,41 +277,33 @@ int Sysdeps<FutexWake>::operator()(int *pointer, bool wake_all) {
 
 int Sysdeps<AnonAllocate>::operator()(size_t size, void **pointer) {
     ensure_handles();
-    MemPoolOp::MemPoolOp_AllocateVmo_Body alloc_body;
-    alloc_body.size = size;
 
-    MemPoolOp pool_op;
-    pool_op.tag = MemPoolOp::Tag::MemPoolOp_AllocateVmo;
-    pool_op.allocate_vmo = alloc_body;
+    if (!pointer || size == 0)
+        return EINVAL;
 
-    Invocation inv;
-    inv.tag = Invocation::Tag::Invocation_MemPool;
-    inv.mem_pool._0 = pool_op;
+    HandleID vmo;
+    int error = allocate_vmo(size, &vmo);
+    if (error)
+        return error;
 
-    SyscallResult vmo_res = sys_invoke(g_mem_pool, &inv);
-    if (vmo_res.error != SysError::Success) return map_error(vmo_res.error);
+    VmoOp op{};
+    op.tag = VmoOp::Tag::VmoOp_MapIntoProc;
+    op.map_into_proc.vaddr = 0;
+    op.map_into_proc.len = size;
+    op.map_into_proc.vm_flags =
+        VM_FLAG_USER | VM_FLAG_WRITE;
 
-    HandleID vmo_handle = vmo_res.value;
+    Invocation inv{};
+    inv.tag = Invocation::Tag::Invocation_Vmo;
+    inv.vmo._0 = op;
 
-    VmoOp::VmoOp_MapIntoProc_Body map_body;
-    map_body.vaddr = 0;
-    map_body.len = size;
-    map_body.vm_flags = 5; 
+    SyscallResult result = sys_invoke(vmo, &inv);
+    ::sys_close(vmo);
 
-    VmoOp vmo_op;
-    vmo_op.tag = VmoOp::Tag::VmoOp_MapIntoProc;
-    vmo_op.map_into_proc = map_body;
+    if (result.error != SysError::Success)
+        return map_error(result.error);
 
-    Invocation map_inv;
-    map_inv.tag = Invocation::Tag::Invocation_Vmo;
-    map_inv.vmo._0 = vmo_op;
-
-    SyscallResult map_res = sys_invoke(vmo_handle, &map_inv);
-    ::sys_close(vmo_handle); 
-
-    if (map_res.error != SysError::Success) return map_error(map_res.error);
-
-    *pointer = reinterpret_cast<void*>(map_res.value);
+    *pointer = reinterpret_cast<void *>(result.value);
     return 0;
 }
 
@@ -269,108 +325,106 @@ int Sysdeps<AnonFree>::operator()(void *pointer, size_t size) {
     return map_error(res.error);
 }
 
-int Sysdeps<VmMap>::operator()(void *hint, size_t size, int prot, int flags, int fd, off_t offset, void **out) {
-    (void)offset;
+int Sysdeps<VmMap>::operator()(
+    void *hint,
+    size_t size,
+    int prot,
+    int flags,
+    int fd,
+    off_t offset,
+    void **out
+) {
     ensure_handles();
-    HandleID vmo_handle = 0;
-    bool close_vmo = false;
 
-    if (flags & 0x20) { // MAP_ANONYMOUS
-        MemPoolOp::MemPoolOp_AllocateVmo_Body alloc_body;
-        alloc_body.size = size;
+    if (!out || size == 0)
+        return EINVAL;
 
-        MemPoolOp pool_op;
-        pool_op.tag = MemPoolOp::Tag::MemPoolOp_AllocateVmo;
-        pool_op.allocate_vmo = alloc_body;
+    if (offset < 0)
+        return EINVAL;
 
-        Invocation inv;
-        inv.tag = Invocation::Tag::Invocation_MemPool;
-        inv.mem_pool._0 = pool_op;
+    if (static_cast<uintptr_t>(offset) & 0xFFF)
+        return EINVAL;
 
-        SyscallResult vmo_res = sys_invoke(g_mem_pool, &inv);
-        if (vmo_res.error != SysError::Success) return map_error(vmo_res.error);
-        
-        vmo_handle = vmo_res.value;
-        close_vmo = true;
+    if ((flags & MAP_FIXED) && !hint)
+        return EINVAL;
+
+    const bool anonymous = flags & MAP_ANONYMOUS;
+
+    if (anonymous && offset != 0)
+        return EINVAL;
+
+    // File-backed MAP_SHARED needs shared dirty-page/writeback semantics.
+    if (!anonymous && (flags & MAP_SHARED))
+        return ENOTSUP;
+    HandleID vmo = 0;
+
+    if (anonymous) {
+        int error = allocate_vmo(size, &vmo);
+        if (error)
+            return error;
     } else {
-        if (fd < 0 || (size_t)fd >= g_fd_table.capacity) return EBADF;
-        HandleID file_handle = g_fd_table.entries[fd];
-        if (file_handle == 0) return EBADF;
+        if (fd < 0 || static_cast<size_t>(fd) >= g_fd_table.capacity)
+            return EBADF;
 
-        FileOp file_op;
+        HandleID file = g_fd_table.entries[fd];
+        if (!file)
+            return EBADF;
+
+        FileOp file_op{};
         file_op.tag = FileOp::Tag::FileOp_GetVmo;
-        
-        Invocation inv;
-        inv.tag = Invocation::Tag::Invocation_File;
-        inv.file._0 = file_op;
 
-        SyscallResult vmo_res = sys_invoke(file_handle, &inv);
-        if (vmo_res.error != SysError::Success) return map_error(vmo_res.error);
-        
-        vmo_handle = vmo_res.value;
-        close_vmo = true;
+        Invocation file_inv{};
+        file_inv.tag = Invocation::Tag::Invocation_File;
+        file_inv.file._0 = file_op;
+
+        SyscallResult result = sys_invoke(file, &file_inv);
+        if (result.error != SysError::Success)
+            return map_error(result.error);
+
+        vmo = result.value;
     }
 
-    if (!(flags & 0x20) && offset != 0) { 
-        VmoOp::VmoOp_Clone_Body clone_body;
-        clone_body.offset = offset;
-        clone_body.len = size;
-
-        VmoOp clone_op;
+    // create a vmo representing the requested file range.
+    if (!anonymous && offset != 0) {
+        VmoOp clone_op{};
         clone_op.tag = VmoOp::Tag::VmoOp_Clone;
-        clone_op.clone = clone_body;
+        clone_op.clone.offset = static_cast<uintptr_t>(offset);
+        clone_op.clone.len = size;
 
-        Invocation clone_inv;
+        Invocation clone_inv{};
         clone_inv.tag = Invocation::Tag::Invocation_Vmo;
         clone_inv.vmo._0 = clone_op;
 
-        SyscallResult clone_res = sys_invoke(vmo_handle, &clone_inv);
-        if (clone_res.error != SysError::Success) {
-            if (close_vmo) ::sys_close(vmo_handle);
-            return map_error(clone_res.error);
-        }
+        SyscallResult result = sys_invoke(vmo, &clone_inv);
+        ::sys_close(vmo);
 
-        if (close_vmo) ::sys_close(vmo_handle);
-        vmo_handle = clone_res.value;
-        close_vmo = true;
+        if (result.error != SysError::Success)
+            return map_error(result.error);
+
+        vmo = result.value;
     }
 
-    // Attempt the mapping with the requested address hint
-    VmoOp::VmoOp_MapIntoProc_Body map_body;
-    map_body.vaddr = reinterpret_cast<uintptr_t>(hint);
-    map_body.len = size;
-    // Translate flags: mlibc (1=R, 2=W, 4=X) to kernel (1=W, 2=X, 4=U)
-    int vm_flags = 4; // VM_FLAG_USER
-    if (prot & 2) vm_flags |= 1; // PROT_WRITE -> VM_FLAG_WRITE
-    if (prot & 4) vm_flags |= 2; // PROT_EXEC -> VM_FLAG_EXEC
-    map_body.vm_flags = vm_flags;
+    VmoOp map_op{};
+    map_op.tag = VmoOp::Tag::VmoOp_MapIntoProc;
+    // Non-fixed hints are advisory. MapIntoProc-at currently has replacement
+    // semantics, so only pass an address when replacement was requested.
+    map_op.map_into_proc.vaddr =
+        (flags & MAP_FIXED) ? reinterpret_cast<uintptr_t>(hint) : 0;
+    map_op.map_into_proc.len = size;
+    map_op.map_into_proc.vm_flags = convert_prot(prot);
 
-    VmoOp vmo_op;
-    vmo_op.tag = VmoOp::Tag::VmoOp_MapIntoProc;
-    vmo_op.map_into_proc = map_body;
-
-    Invocation map_inv;
+    Invocation map_inv{};
     map_inv.tag = Invocation::Tag::Invocation_Vmo;
-    map_inv.vmo._0 = vmo_op;
+    map_inv.vmo._0 = map_op;
 
-    SyscallResult map_res = sys_invoke(vmo_handle, &map_inv);
-    
-    // Fallback: If the fixed placement collided, and MAP_FIXED (0x10) was NOT specified,
-    // clear the vaddr requirement and let the kernel assign a free region safely.
-    if (map_res.error != SysError::Success && !(flags & 0x10) && hint != nullptr) {
-        map_body.vaddr = 0; 
-        vmo_op.map_into_proc = map_body;
-        map_inv.vmo._0 = vmo_op;
-        map_res = sys_invoke(vmo_handle, &map_inv);
-    }
+    SyscallResult result = sys_invoke(vmo, &map_inv);
 
-    if (close_vmo) {
-        ::sys_close(vmo_handle);
-    }
+    ::sys_close(vmo);
 
-    if (map_res.error != SysError::Success) return map_error(map_res.error);
+    if (result.error != SysError::Success)
+        return map_error(result.error);
 
-    *out = reinterpret_cast<void*>(map_res.value);
+    *out = reinterpret_cast<void *>(result.value);
     return 0;
 }
 
@@ -384,11 +438,7 @@ int Sysdeps<VmProtect>::operator()(void *pointer, size_t size, int prot) {
     mprot_body.vaddr = reinterpret_cast<uintptr_t>(pointer);
     mprot_body.len = size;
     
-    // Translate flags: mlibc (1=R, 2=W, 4=X) to kernel (1=W, 2=X, 4=U)
-    int vm_flags = 4; // VM_FLAG_USER
-    if (prot & 2) vm_flags |= 1; // PROT_WRITE -> VM_FLAG_WRITE
-    if (prot & 4) vm_flags |= 2; // PROT_EXEC -> VM_FLAG_EXEC
-    mprot_body.prot = vm_flags;
+    mprot_body.prot = convert_prot(prot);
 
     ProcOp proc_op;
     proc_op.tag = ProcOp::Tag::ProcOp_Mprotect;
@@ -411,28 +461,36 @@ int Sysdeps<Write>::operator()(int fd, const void *buf, size_t count, ssize_t *b
     HandleID handle = g_fd_table.entries[fd];
     if (handle == 0) return EBADF;
 
-    FileOp::FileOp_Write_Body write_body;
-    write_body.offset = (uintptr_t)-1; // Request kernel-side cursor
-    write_body.buffer_ptr = reinterpret_cast<uintptr_t>(buf);
-    write_body.len = count;
+    size_t total = 0;
+    while (total < count) {
+        FileOp::FileOp_Write_Body write_body;
+        write_body.offset = (uintptr_t)-1; // Request kernel-side cursor
+        write_body.buffer_ptr = reinterpret_cast<uintptr_t>(buf) + total;
+        write_body.len = count - total;
 
-    FileOp file_op;
-    file_op.tag = FileOp::Tag::FileOp_Write;
-    file_op.write = write_body;
+        FileOp file_op;
+        file_op.tag = FileOp::Tag::FileOp_Write;
+        file_op.write = write_body;
 
-    Invocation inv;
-    inv.tag = Invocation::Tag::Invocation_File;
-    inv.file._0 = file_op;
+        Invocation inv;
+        inv.tag = Invocation::Tag::Invocation_File;
+        inv.file._0 = file_op;
 
-    SyscallResult res = sys_invoke(handle, &inv);
-    if (res.error == SysError::InvalidArgument || res.error == SysError::UnsupportedOperation) {
-        inv.file._0.write.offset = 0;
-        res = sys_invoke(handle, &inv);
+        SyscallResult res = sys_invoke(handle, &inv);
+        if (res.error == SysError::InvalidArgument || res.error == SysError::UnsupportedOperation) {
+            inv.file._0.write.offset = 0;
+            res = sys_invoke(handle, &inv);
+        }
+
+        if (res.error != SysError::Success) {
+            if (total != 0) break;
+            return map_error(res.error);
+        }
+        if (res.value == 0) break;
+        total += res.value;
     }
 
-    if (res.error != SysError::Success) return map_error(res.error);
-
-    *bytes_written = res.value;
+    *bytes_written = total;
     return 0;
 }
 
@@ -710,7 +768,7 @@ int Sysdeps<Tcgetattr>::operator()(int fd, struct termios *attr) {
     SysError e = ctrl_send(g_term_ctrl, cmd);
     if (e != SysError::Success) return map_error(e);
 
-    termios t{};
+    Termios t{};
     e = ctrl_recv(g_term_ctrl, &t);
     if (e != SysError::Success) return map_error(e);
 
@@ -720,8 +778,8 @@ int Sysdeps<Tcgetattr>::operator()(int fd, struct termios *attr) {
     attr->c_lflag  = t.c_lflag;
     attr->c_line   = t.c_line;
     memcpy(attr->c_cc, t.c_cc, sizeof(t.c_cc));
-    attr->c_ibaud = t.c_ibaud;
-    attr->c_obaud = t.c_obaud;
+    attr->c_ibaud = t.c_ispeed;
+    attr->c_obaud = t.c_ospeed;
     return 0;
 }
 
@@ -739,8 +797,8 @@ int Sysdeps<Tcsetattr>::operator()(int fd, int optional_actions, const struct te
     cmd.set_termios._0.c_lflag  = attr->c_lflag;
     cmd.set_termios._0.c_line   = attr->c_line;
     memcpy(cmd.set_termios._0.c_cc, attr->c_cc, sizeof(cmd.set_termios._0.c_cc));
-    cmd.set_termios._0.c_ibaud = attr->c_ibaud;
-    cmd.set_termios._0.c_obaud = attr->c_obaud;
+    cmd.set_termios._0.c_ispeed = attr->c_ibaud;
+    cmd.set_termios._0.c_ospeed = attr->c_obaud;
 
     SysError e = ctrl_send(g_term_ctrl, cmd);
     return map_error(e);
@@ -830,32 +888,7 @@ int Sysdeps<Ioctl>::operator()(int fd, unsigned long request, void *arg, int *re
 // ----------------------------------------------------
 
 static void ensure_handles() {
-    static bool pool_initialized = false;
     static bool stack_initialized = false;
-
-    // initialize the memory pool as early as possible.
-    if (!pool_initialized && g_mem_pool == 0) {
-        HandleID mem_man = resolve_path("/System/Services/MemoryManager");
-        if (mem_man != 0) {
-            MemManOp::MemManOp_CreatePool_Body body;
-            body.limit = 0; // 0 = unlimited or default
-
-            MemManOp op;
-            op.tag = MemManOp::Tag::MemManOp_CreatePool;
-            op.create_pool = body;
-
-            Invocation mem_inv;
-            mem_inv.tag = Invocation::Tag::Invocation_MemoryManager;
-            mem_inv.memory_manager._0 = op;
-
-            SyscallResult res = ::sys_invoke(mem_man, &mem_inv);
-            if (res.error == SysError::Success) {
-                g_mem_pool = res.value;
-                pool_initialized = true;
-            }
-            ::sys_close(mem_man);
-        }
-    }
 
     // initialize stack-dependent handles once entrystack is populated by the runtime.
     if (!stack_initialized && &entryStack && entryStack) {
@@ -866,6 +899,7 @@ static void ensure_handles() {
             g_self_handle = pkg->self_handle;
             g_root_handle = pkg->root_handle;
             g_sink_handle = pkg->sink_handle;
+            g_mem_pool = pkg->memory_pool_handle;
 
             g_fd_table.entries[STDIN_FILENO] = pkg->source_handle;
             g_fd_table.entries[STDOUT_FILENO] = pkg->sink_handle;

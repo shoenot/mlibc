@@ -6,14 +6,6 @@
 #include <abi/vespertine_abi.hpp>
 #include "syscall.hpp"
 
-struct BrokerRequest {
-    uintptr_t tag;
-};
-
-struct BrokerResponse {
-    uintptr_t handle;
-};
-
 static SyscallResult sys_write(HandleID handle, const void *buf, size_t count) {
     FileOp::FileOp_Write_Body write_body;
     write_body.offset = 0;
@@ -157,88 +149,15 @@ extern "C" void __mlibc_entry(uintptr_t *stack) {
     if (pkg) {
         g_self_handle = pkg->self_handle;
         g_root_handle = pkg->root_handle;
+        g_mem_pool = pkg->memory_pool_handle;
 
         g_fd_table.entries[0] = pkg->source_handle; // STDIN_FILENO
         g_fd_table.entries[1] = pkg->sink_handle;   // STDOUT_FILENO
         g_fd_table.entries[2] = pkg->sink_handle;   // STDERR_FILENO
+    }
 
-        // Hunt for the Memory Manager and create a pool via the Resource Broker (with VFS fallback)
-        HandleID sys_dir = sys_lookup(g_root_handle, "System");
-        if (sys_dir != 0) {
-            HandleID srv_dir = sys_lookup(sys_dir, "Services");
-            if (srv_dir != 0) {
-                HandleID broker = sys_lookup(srv_dir, "ResourceBroker");
-                if (broker != 0) {
-                    // Connect to the Resource Broker
-                    Invocation inv;
-                    inv.tag = Invocation::Tag::Invocation_Broker;
-                    inv.broker._0.tag = BrokerOp::Tag::BrokerOp_Connect;
-                    inv.broker._0.connect.socket_to_give = 0;
-
-                    SyscallResult conn_res = sys_invoke(broker, &inv);
-                    if (conn_res.error == SysError::Success) {
-                        HandleID conn_sock = conn_res.value;
-
-                        // Query for the Memory Manager (TAG_SYS_MEMMAN = 0x2006)
-                        BrokerRequest req;
-                        req.tag = 0x2006;
-
-                        SyscallResult wr_res = sys_write(conn_sock, &req, sizeof(req));
-                        if (wr_res.error == SysError::Success) {
-                            BrokerResponse resp;
-                            SyscallResult rd_res = sys_read(conn_sock, &resp, sizeof(resp));
-                            if (rd_res.error == SysError::Success && resp.handle != 0) {
-                                HandleID mem_man = resp.handle;
-
-                                // Create the private memory pool
-                                MemManOp::MemManOp_CreatePool_Body body;
-                                body.limit = 0; // 0 = unlimited or default
-                                
-                                MemManOp op;
-                                op.tag = MemManOp::Tag::MemManOp_CreatePool;
-                                op.create_pool = body;
-
-                                Invocation mem_inv;
-                                mem_inv.tag = Invocation::Tag::Invocation_MemoryManager;
-                                mem_inv.memory_manager._0 = op;
-
-                                SyscallResult res = sys_invoke(mem_man, &mem_inv);
-                                if (res.error == SysError::Success) { 
-                                    g_mem_pool = res.value;
-                                }
-                                sys_close(mem_man);
-                            }
-                        }
-                        sys_close(conn_sock);
-                    }
-                    sys_close(broker);
-                }
-
-                // If broker connection or resolution failed, fall back to direct VFS lookup (e.g., for hesper)
-                if (g_mem_pool == 0) {
-                    HandleID mem_man = sys_lookup(srv_dir, "MemoryManager");
-                    if (mem_man != 0) {
-                        MemManOp::MemManOp_CreatePool_Body body;
-                        body.limit = 0; // 0 = unlimited or default
-                        MemManOp op;
-                        op.tag = MemManOp::Tag::MemManOp_CreatePool;
-                        op.create_pool = body;
-
-                        Invocation mem_inv;
-                        mem_inv.tag = Invocation::Tag::Invocation_MemoryManager;
-                        mem_inv.memory_manager._0 = op;
-
-                        SyscallResult res = sys_invoke(mem_man, &mem_inv);
-                        if (res.error == SysError::Success) { 
-                            g_mem_pool = res.value;
-                        }
-                        sys_close(mem_man);
-                    }
-                }
-                sys_close(srv_dir);
-            }
-            sys_close(sys_dir);
-        }
+    if (!g_mem_pool) {
+        __builtin_trap();
     }
 
     size_t argc = 0;
@@ -255,7 +174,18 @@ extern "C" void __mlibc_entry(uintptr_t *stack) {
     size_t fake_stack_len = 1 + argc + 1 + envc + 1 + 4;
     uintptr_t *fake_stack = (uintptr_t *)__builtin_alloca(fake_stack_len * sizeof(uintptr_t));
 
-    size_t aux_idx = 1 + argc + 1 + envc + 1;
+    size_t cursor = 0;
+    fake_stack[cursor++] = argc;
+
+    for (size_t i = 0; i < argc; i++)
+        fake_stack[cursor++] = reinterpret_cast<uintptr_t>(pkg->argv[i]);
+    fake_stack[cursor++] = 0;
+
+    for (size_t i = 0; i < envc; i++)
+        fake_stack[cursor++] = reinterpret_cast<uintptr_t>(pkg->envp[i]);
+    fake_stack[cursor++] = 0;
+
+    size_t aux_idx = cursor;
 
     fake_stack[aux_idx + 0] = AT_VESPERTINE_INITPKG;
     fake_stack[aux_idx + 1] = reinterpret_cast<uintptr_t>(pkg);

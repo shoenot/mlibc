@@ -43,6 +43,7 @@ struct ProcessInitPackage {
     HandleID root_handle;
     HandleID source_handle;
     HandleID sink_handle;
+    HandleID memory_pool_handle;
     HandleGrant *extra_handles_ptr;
     uintptr_t extra_handles_len;
     uintptr_t argc;
@@ -60,11 +61,46 @@ struct alignas(8) PacketHeader {
     uint32_t _pad;
 };
 
+enum class SysError : size_t {
+    Success = 0,
+    InvalidPointer = 1,
+    BadAddress = 2,
+    OutOfMemory = 3,
+    InvalidHandle = 21,
+    AccessDenied = 22,
+    InvalidArgument = 23,
+    UnsupportedOperation = 24,
+    BufferFull = 25,
+    WouldBlock = 26,
+    PoolExhausted = 27,
+    NameTooLong = 28,
+    InvalidEncoding = 29,
+    NotMapped = 30,
+    UnknownSyscall = 41,
+    ThreadSpawnFail = 50,
+};
+
+struct SyscallResult {
+    size_t value;
+    SysError error;
+};
+
+
+enum vespertine_std_handle {
+    VESPERTINE_HANDLE_ROOT = 0,
+    VESPERTINE_HANDLE_SELF = 1,
+    VESPERTINE_HANDLE_SOURCE = 2,
+    VESPERTINE_HANDLE_SINK = 3,
+    VESPERTINE_HANDLE_MEMORY_POOL = 4,
+};
+
 enum class ThreadOp {
   ThreadOp_Kill,
   ThreadOp_Join,
   ThreadOp_GetID,
 };
+
+using CapabilityID = uintptr_t;
 
 using HandleID = uintptr_t;
 
@@ -319,17 +355,17 @@ struct MemManOp {
 
 struct BrokerOp {
   enum class Tag {
-    BrokerOp_Connect,
-    BrokerOp_Accept,
+    BrokerOp_Request,
   };
 
-  struct BrokerOp_Connect_Body {
-    HandleID socket_to_give;
+  struct BrokerOp_Request_Body {
+    CapabilityID capability;
+    AccessRights requested_rights;
   };
 
   Tag tag;
   union {
-    BrokerOp_Connect_Body connect;
+    BrokerOp_Request_Body request;
   };
 };
 
@@ -380,6 +416,7 @@ struct SocketOp {
   enum class Tag {
     SocketOp_Create,
     SocketOp_SetNB,
+    SocketOp_SetReadPolicy,
   };
 
   struct SocketOp_Create_Body {
@@ -391,10 +428,16 @@ struct SocketOp {
     bool nb;
   };
 
+  struct SocketOp_SetReadPolicy_Body {
+    uintptr_t min;
+    uintptr_t timeout_ds;
+  };
+
   Tag tag;
   union {
     SocketOp_Create_Body create;
     SocketOp_SetNB_Body set_nb;
+    SocketOp_SetReadPolicy_Body set_read_policy;
   };
 };
 
@@ -509,28 +552,15 @@ struct Invocation {
   };
 };
 
-enum class SysError : size_t {
-    Success = 0,
-    InvalidPointer = 1,
-    BadAddress = 2,
-    OutOfMemory = 3,
-    InvalidHandle = 21,
-    AccessDenied = 22,
-    InvalidArgument = 23,
-    UnsupportedOperation = 24,
-    BufferFull = 25,
-    WouldBlock = 26,
-    PoolExhausted = 27,
-    NameTooLong = 28,
-    InvalidEncoding = 29,
-    NotMapped = 30,
-    UnknownSyscall = 41,
-    ThreadSpawnFail = 50,
-};
-
-struct SyscallResult {
-    size_t value;
-    SysError error;
+struct Termios {
+  uint32_t c_iflag;
+  uint32_t c_oflag;
+  uint32_t c_cflag;
+  uint32_t c_lflag;
+  uint8_t c_line;
+  uint8_t c_cc[32];
+  uint32_t c_ispeed;
+  uint32_t c_ospeed;
 };
 
 struct TermCommand {
@@ -541,7 +571,7 @@ struct TermCommand {
   };
 
   struct TermCommand_SetTermios_Body {
-    termios _0;
+    Termios _0;
   };
 
   Tag tag;
@@ -549,3 +579,7 @@ struct TermCommand {
     TermCommand_SetTermios_Body set_termios;
   };
 };
+
+constexpr static const CapabilityID CAP_SOCKFAC = 4;
+
+constexpr static const CapabilityID CAP_CLOCK = 6;
