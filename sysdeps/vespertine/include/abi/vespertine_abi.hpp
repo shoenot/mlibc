@@ -20,7 +20,11 @@ constexpr static const uintptr_t TAG_ARG_FILE_1 = 4097;
 using CapabilityID = uintptr_t;
 
 constexpr static const CapabilityID CAP_LOGGER = 8192;
+constexpr static const CapabilityID CAP_CLOCK = 8193;
+constexpr static const CapabilityID CAP_PROCMAN = 8194;
+constexpr static const CapabilityID CAP_SOCKFAC = 8195;
 constexpr static const CapabilityID CAP_RESOURCE_MANAGER = 8196;
+
 constexpr static const CapabilityID CAP_TERMINAL_CONTROL = 12288;
 
 struct CapabilityGrant {
@@ -575,9 +579,3 @@ struct TermCommand {
     TermCommand_SetTermios_Body set_termios;
   };
 };
-
-constexpr static const CapabilityID CAP_PROCMAN = 2;
-
-constexpr static const CapabilityID CAP_SOCKFAC = 4;
-
-constexpr static const CapabilityID CAP_CLOCK = 6;
