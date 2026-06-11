@@ -132,7 +132,7 @@ static void debug_print_num(const char *prefix, size_t num) {
 
 static void ensure_handles();
 static HandleID resolve_path(const char *path);
-static HandleID find_tag(uintptr_t tag);
+static HandleID find_capability(CapabilityID capability);
 static char *find_last_char(char *string, char character);
 
 static ProcessInitPackage *find_init_package(uintptr_t *stack) {
@@ -734,7 +734,7 @@ int Sysdeps<Ftruncate>::operator()(int fd, size_t size) {
 int Sysdeps<ClockGet>::operator()(int clock, time_t *secs, long *nanos) {
     (void)clock;
     ensure_handles();
-    uintptr_t sys_clock = find_tag(TAG_SYS_CLOCK);
+    uintptr_t sys_clock = find_capability(CAP_CLOCK);
     if (sys_clock == 0) return EPERM;
 
     ClockOp::ClockOp_GetTimestamp_Body ts_body;
@@ -759,7 +759,7 @@ int Sysdeps<ClockGet>::operator()(int clock, time_t *secs, long *nanos) {
 int Sysdeps<Tcgetattr>::operator()(int fd, struct termios *attr) {
     (void)fd;
     ensure_handles();
-    uintptr_t g_term_ctrl = find_tag(TAG_APP_TERM);
+    uintptr_t g_term_ctrl = find_capability(CAP_TERMINAL_CONTROL);
     if (g_term_ctrl == 0) return ENOTTY;
 
     TermCommand cmd{};
@@ -786,7 +786,7 @@ int Sysdeps<Tcgetattr>::operator()(int fd, struct termios *attr) {
 int Sysdeps<Tcsetattr>::operator()(int fd, int optional_actions, const struct termios *attr) {
     (void)fd; (void)optional_actions;
     ensure_handles();
-    uintptr_t g_term_ctrl = find_tag(TAG_APP_TERM);
+    uintptr_t g_term_ctrl = find_capability(CAP_TERMINAL_CONTROL);
     if (g_term_ctrl == 0) return ENOTTY;
 
     TermCommand cmd{};
@@ -808,7 +808,7 @@ int Sysdeps<Tcsetattr>::operator()(int fd, int optional_actions, const struct te
 int Sysdeps<Tcgetwinsize>::operator()(int fd, struct winsize *winsz) {
     (void)fd;
     ensure_handles();
-    uintptr_t g_term_ctrl = find_tag(TAG_APP_TERM);
+    uintptr_t g_term_ctrl = find_capability(CAP_TERMINAL_CONTROL);
     if (g_term_ctrl == 0) return ENOTTY;
 
     TermCommand cmd{};
@@ -839,7 +839,7 @@ int Sysdeps<Tcgetwinsize>::operator()(int fd, struct winsize *winsz) {
 
 int Sysdeps<Isatty>::operator()(int fd) {
     ensure_handles();
-    uintptr_t g_term_ctrl = find_tag(TAG_APP_TERM);
+    uintptr_t g_term_ctrl = find_capability(CAP_TERMINAL_CONTROL);
     if (g_term_ctrl != 0 && (fd == 0 || fd == 1 || fd == 2))
         return 0; // 0 = Success (Is a TTY)
     return ENOTTY; // Error (Not a TTY)
@@ -851,7 +851,7 @@ int Sysdeps<Ioctl>::operator()(int fd, unsigned long request, void *arg, int *re
 
     if (request == TIOCGWINSZ) {
         struct winsize *winsz = static_cast<struct winsize *>(arg);
-        uintptr_t g_term_ctrl = find_tag(TAG_APP_TERM);
+        uintptr_t g_term_ctrl = find_capability(CAP_TERMINAL_CONTROL);
         if (g_term_ctrl == 0) return ENOTTY;
 
         TermCommand cmd{};
@@ -959,11 +959,11 @@ static HandleID resolve_path(const char *path) {
     return curr;
 }
 
-static HandleID find_tag(uintptr_t tag) {
+static HandleID find_capability(CapabilityID capability) {
     if (!g_init_pkg) return 0;
-    for (size_t i = 0; i < g_init_pkg->extra_handles_len; i++) {
-        if (g_init_pkg->extra_handles_ptr[i].tag == tag) {
-            return g_init_pkg->extra_handles_ptr[i].id;
+    for (size_t i = 0; i < g_init_pkg->capabilities_len; i++) {
+        if (g_init_pkg->capabilities_ptr[i].capability == capability) {
+            return g_init_pkg->capabilities_ptr[i].id;
         }
     }
     return 0;

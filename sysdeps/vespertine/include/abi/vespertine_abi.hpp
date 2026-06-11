@@ -1,6 +1,7 @@
 #pragma once
 #include <stdarg.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <abi/flags.hpp>
 #include <abi-bits/termios.h>
@@ -16,26 +17,16 @@ constexpr static const uintptr_t TAG_ARG_FILE_0 = 4096;
 
 constexpr static const uintptr_t TAG_ARG_FILE_1 = 4097;
 
-constexpr static const uintptr_t TAG_SYS_LOGGER = 8192;
+using CapabilityID = uintptr_t;
 
-constexpr static const uintptr_t TAG_SYS_CONFIG = 8193;
+constexpr static const CapabilityID CAP_LOGGER = 8192;
+constexpr static const CapabilityID CAP_RESOURCE_MANAGER = 8196;
+constexpr static const CapabilityID CAP_TERMINAL_CONTROL = 12288;
 
-constexpr static const uintptr_t TAG_SYS_PROCMAN = 8194;
-
-constexpr static const uintptr_t TAG_SYS_SOCKFAC = 8195;
-
-constexpr static const uintptr_t TAG_SYS_RES_MAN = 8196;
-
-constexpr static const uintptr_t TAG_SYS_CLOCK = 8197;
-
-constexpr static const uintptr_t TAG_SYS_MEMMAN = 8198;
-
-constexpr static const uintptr_t TAG_APP_TERM = 12288;
-
-struct HandleGrant {
+struct CapabilityGrant {
     HandleID id;
     AccessRights rights;
-    uintptr_t tag;
+    CapabilityID capability;
 };
 
 struct ProcessInitPackage {
@@ -44,12 +35,19 @@ struct ProcessInitPackage {
     HandleID source_handle;
     HandleID sink_handle;
     HandleID memory_pool_handle;
-    HandleGrant *extra_handles_ptr;
-    uintptr_t extra_handles_len;
+    CapabilityGrant *capabilities_ptr;
+    uintptr_t capabilities_len;
     uintptr_t argc;
     const char **argv;
     const char **envp;
 };
+
+static_assert(offsetof(CapabilityGrant, capability) == 16);
+static_assert(sizeof(CapabilityGrant) == 24);
+static_assert(offsetof(ProcessInitPackage, capabilities_ptr) == 40);
+static_assert(offsetof(ProcessInitPackage, capabilities_len) == 48);
+static_assert(offsetof(ProcessInitPackage, argc) == 56);
+static_assert(sizeof(ProcessInitPackage) == 80);
 
 struct alignas(8) PacketHeader {
     uint32_t magic;
@@ -99,8 +97,6 @@ enum class ThreadOp {
   ThreadOp_Join,
   ThreadOp_GetID,
 };
-
-using CapabilityID = uintptr_t;
 
 using HandleID = uintptr_t;
 
@@ -326,8 +322,8 @@ struct ProcManOp {
     AccessRights root_rights;
     HandleID source;
     HandleID sink;
-    uintptr_t extra_handles_ptr;
-    uintptr_t extra_handles_len;
+    uintptr_t capabilities_ptr;
+    uintptr_t capabilities_len;
     uintptr_t args_buffer_ptr;
     uintptr_t args_buffer_len;
   };
@@ -579,6 +575,8 @@ struct TermCommand {
     TermCommand_SetTermios_Body set_termios;
   };
 };
+
+constexpr static const CapabilityID CAP_PROCMAN = 2;
 
 constexpr static const CapabilityID CAP_SOCKFAC = 4;
 
