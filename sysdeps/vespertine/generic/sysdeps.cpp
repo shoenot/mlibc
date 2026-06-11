@@ -163,20 +163,32 @@ static ProcessInitPackage *find_init_package(uintptr_t *stack) {
 
 
 static int allocate_vmo(size_t size, HandleID *out) {
-    MemPoolOp op{};
-    op.tag = MemPoolOp::Tag::MemPoolOp_AllocateVmo;
-    op.allocate_vmo.size = size;
+    for (;;) {
+        MemPoolOp op{};
+        op.tag = MemPoolOp::Tag::MemPoolOp_AllocateVmo;
+        op.allocate_vmo.size = size;
 
-    Invocation inv{};
-    inv.tag = Invocation::Tag::Invocation_MemPool;
-    inv.mem_pool._0 = op;
+        Invocation inv{};
+        inv.tag = Invocation::Tag::Invocation_MemPool;
+        inv.mem_pool._0 = op;
 
-    SyscallResult result = sys_invoke(g_mem_pool, &inv);
-    if (result.error != SysError::Success)
-        return map_error(result.error);
+        SyscallResult result = sys_invoke(g_mem_pool, &inv);
+        if (result.error == SysError::Success) {
+            *out = result.value;
+            return 0;
+        }
+        if (result.error != SysError::PoolExhausted)
+            return map_error(result.error);
 
-    *out = result.value;
-    return 0;
+        MemPoolOp expand{};
+        expand.tag = MemPoolOp::Tag::MemPoolOp_RequestExpansion;
+        expand.request_expansion.additional_bytes = size;
+        inv.mem_pool._0 = expand;
+
+        result = sys_invoke(g_mem_pool, &inv);
+        if (result.error != SysError::Success)
+            return map_error(result.error);
+    }
 }
 
 static constexpr uintptr_t VM_FLAG_WRITE = 1 << 0;

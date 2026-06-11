@@ -23,7 +23,6 @@ constexpr static const CapabilityID CAP_LOGGER = 8192;
 constexpr static const CapabilityID CAP_CLOCK = 8193;
 constexpr static const CapabilityID CAP_PROCMAN = 8194;
 constexpr static const CapabilityID CAP_SOCKFAC = 8195;
-constexpr static const CapabilityID CAP_RESOURCE_MANAGER = 8196;
 
 constexpr static const CapabilityID CAP_TERMINAL_CONTROL = 12288;
 
@@ -373,6 +372,7 @@ struct MemPoolOp {
   enum class Tag {
     MemPoolOp_AllocateVmo,
     MemPoolOp_CreateSubPool,
+    MemPoolOp_RequestExpansion,
   };
 
   struct MemPoolOp_AllocateVmo_Body {
@@ -383,10 +383,15 @@ struct MemPoolOp {
     uintptr_t limit;
   };
 
+  struct MemPoolOp_RequestExpansion_Body {
+    uintptr_t additional_bytes;
+  };
+
   Tag tag;
   union {
     MemPoolOp_AllocateVmo_Body allocate_vmo;
     MemPoolOp_CreateSubPool_Body create_sub_pool;
+    MemPoolOp_RequestExpansion_Body request_expansion;
   };
 };
 
