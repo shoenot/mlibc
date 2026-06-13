@@ -265,6 +265,7 @@ struct ProcOp {
   enum class Tag {
     ProcOp_Kill,
     ProcOp_GetStatus,
+    ProcOp_GetExitInfo,
     ProcOp_Unmap,
     ProcOp_SpawnThread,
     ProcOp_SetFsBase,
@@ -274,6 +275,10 @@ struct ProcOp {
 
   struct ProcOp_GetStatus_Body {
     uintptr_t status_ptr;
+  };
+
+  struct ProcOp_GetExitInfo_Body {
+    uintptr_t info_ptr;
   };
 
   struct ProcOp_Unmap_Body {
@@ -306,6 +311,7 @@ struct ProcOp {
   Tag tag;
   union {
     ProcOp_GetStatus_Body get_status;
+    ProcOp_GetExitInfo_Body get_exit_info;
     ProcOp_Unmap_Body unmap;
     ProcOp_SpawnThread_Body spawn_thread;
     ProcOp_SetFsBase_Body set_fs_base;

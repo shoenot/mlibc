@@ -38,14 +38,13 @@ SyscallResult sys_close(HandleID handle) {
     }
 }
 
-SyscallResult sys_thread_terminate() {
-    size_t ret;
+[[noreturn]] void sys_thread_terminate(uint32_t exit_code) {
     asm volatile(
         "mov $2, %%rax\n\t"
         "syscall"
-        : "=a"(ret)
-        : 
-        : "rcx", "r11", "memory"
+        :
+        : "D"(static_cast<size_t>(exit_code))
+        : "rax", "rcx", "r11", "memory"
     );
     __builtin_unreachable(); 
 }

@@ -241,17 +241,7 @@ static int map_vmo(
 // ----------------------------------------------------
 
 void Sysdeps<Exit>::operator()(int status) {
-    (void)status;
-    ensure_handles();
-    ProcOp proc_op;
-    proc_op.tag = ProcOp::Tag::ProcOp_Kill;
-
-    Invocation inv;
-    inv.tag = Invocation::Tag::Invocation_Proc;
-    inv.proc._0 = proc_op;
-
-    sys_invoke(g_self_handle, &inv);
-    sys_thread_terminate();
+    sys_thread_terminate(static_cast<uint32_t>(status));
 }
 
 int Sysdeps<TcbSet>::operator()(void *tcb) {
