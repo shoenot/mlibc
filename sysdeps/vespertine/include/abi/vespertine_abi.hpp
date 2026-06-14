@@ -8,6 +8,7 @@
 #include <new>
 
 using HandleID = uintptr_t;
+using UserID = uint32_t;
 
 constexpr static const uintptr_t AT_VESPERTINE_INITPKG = 0x6fff0001;
 
@@ -38,6 +39,7 @@ struct ProcessInitPackage {
     HandleID source_handle;
     HandleID sink_handle;
     HandleID memory_pool_handle;
+    HandleID cwd_handle;
     CapabilityGrant *capabilities_ptr;
     uintptr_t capabilities_len;
     uintptr_t argc;
@@ -47,10 +49,10 @@ struct ProcessInitPackage {
 
 static_assert(offsetof(CapabilityGrant, capability) == 16);
 static_assert(sizeof(CapabilityGrant) == 24);
-static_assert(offsetof(ProcessInitPackage, capabilities_ptr) == 40);
-static_assert(offsetof(ProcessInitPackage, capabilities_len) == 48);
-static_assert(offsetof(ProcessInitPackage, argc) == 56);
-static_assert(sizeof(ProcessInitPackage) == 80);
+static_assert(offsetof(ProcessInitPackage, capabilities_ptr) == 48);
+static_assert(offsetof(ProcessInitPackage, capabilities_len) == 56);
+static_assert(offsetof(ProcessInitPackage, argc) == 64);
+static_assert(sizeof(ProcessInitPackage) == 88);
 
 struct alignas(8) PacketHeader {
     uint32_t magic;
@@ -93,6 +95,7 @@ enum vespertine_std_handle {
     VESPERTINE_HANDLE_SOURCE = 2,
     VESPERTINE_HANDLE_SINK = 3,
     VESPERTINE_HANDLE_MEMORY_POOL = 4,
+    VESPERTINE_HANDLE_CWD = 5,
 };
 
 enum class ThreadOp {
@@ -141,6 +144,7 @@ struct DirectoryOp {
     DirectoryOp_List,
     DirectoryOp_CreateFile,
     DirectoryOp_CreateDir,
+    DirectoryOp_Resolve,
   };
 
   struct DirectoryOp_Link_Body {
@@ -174,6 +178,13 @@ struct DirectoryOp {
     uintptr_t name_len;
   };
 
+  struct DirectoryOp_Resolve_Body {
+    HandleID start;
+    uintptr_t path_ptr;
+    uintptr_t path_len;
+    AccessRights rights;
+  };
+
   Tag tag;
   union {
     DirectoryOp_Link_Body link;
@@ -182,6 +193,7 @@ struct DirectoryOp {
     DirectoryOp_List_Body list;
     DirectoryOp_CreateFile_Body create_file;
     DirectoryOp_CreateDir_Body create_dir;
+    DirectoryOp_Resolve_Body resolve;
   };
 };
 
@@ -329,6 +341,8 @@ struct ProcManOp {
     HandleID exec_handle;
     HandleID root_handle;
     AccessRights root_rights;
+    HandleID cwd_handle;
+    AccessRights cwd_rights;
     HandleID source;
     HandleID sink;
     uintptr_t capabilities_ptr;

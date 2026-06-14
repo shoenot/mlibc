@@ -98,6 +98,7 @@ struct FdTable {
 
 extern HandleID g_self_handle;
 extern HandleID g_root_handle;
+extern HandleID g_cwd_handle;
 extern HandleID g_mem_pool;
 extern FdTable g_fd_table;
 
@@ -149,6 +150,7 @@ extern "C" void __mlibc_entry(uintptr_t *stack) {
     if (pkg) {
         g_self_handle = pkg->self_handle;
         g_root_handle = pkg->root_handle;
+        g_cwd_handle = pkg->cwd_handle;
         g_mem_pool = pkg->memory_pool_handle;
 
         g_fd_table.entries[0] = pkg->source_handle; // STDIN_FILENO

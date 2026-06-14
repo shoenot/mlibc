@@ -31,6 +31,7 @@ struct FdTable {
 
 // --- globals ---
 HandleID g_root_handle = 0;
+HandleID g_cwd_handle = VESPERTINE_HANDLE_CWD;
 HandleID g_self_handle = 1;
 HandleID g_sink_handle = 3; // Default debug sink
 HandleID g_mem_pool = VESPERTINE_HANDLE_MEMORY_POOL; 
@@ -131,7 +132,9 @@ static void debug_print_num(const char *prefix, size_t num) {
 }
 
 static void ensure_handles();
-static HandleID resolve_path(const char *path);
+static HandleID resolve_path(const char *path, AccessRights rights);
+static HandleID resolve_path_from(const char *path, HandleID start, AccessRights rights);
+static int resolve_parent(const char *path, AccessRights rights, HandleID *parent, const char **name, char *storage, size_t storage_size);
 static HandleID find_capability(CapabilityID capability);
 static char *find_last_char(char *string, char character);
 
@@ -617,7 +620,19 @@ int Sysdeps<Open>::operator()(
     
     memcpy(local_path, path, length + 1);
     
-    HandleID file_handle = resolve_path(local_path);
+    AccessRights requested_rights = AccessRights::READ;
+    switch (flags & O_ACCMODE) {
+        case O_WRONLY:
+            requested_rights = AccessRights::WRITE;
+            break;
+        case O_RDWR:
+            requested_rights = AccessRights::READ | AccessRights::WRITE;
+            break;
+    }
+    if (flags & O_DIRECTORY)
+        requested_rights = AccessRights::LIST | AccessRights::TRAVERSE;
+
+    HandleID file_handle = resolve_path(local_path, requested_rights);
     
     if (file_handle != 0) {
         // O_CREAT | O_EXCL must fail when the file already exists.
@@ -629,26 +644,11 @@ int Sysdeps<Open>::operator()(
         if (!(flags & O_CREAT))
             return ENOENT;
     
-        // Split path into parent directory and final filename.
-        char *last_slash = find_last_char(local_path, '/');
-        const char *filename = local_path;
-        HandleID parent_handle = g_root_handle;
-    
-        if (last_slash) {
-            filename = last_slash + 1;
-    
-            if (!*filename)
-                return EINVAL;
-    
-            if (last_slash != local_path) {
-                *last_slash = '\0';
-                parent_handle = resolve_path(local_path);
-    
-                if (parent_handle == 0)
-                    return ENOENT;
-            }
-            // If last_slash == local_path, this is "/file", whose parent is root.
-        }
+        const char *filename;
+        HandleID parent_handle;
+        int e = resolve_parent(path, AccessRights::CREATE, &parent_handle, &filename, local_path, sizeof(local_path));
+        if (e)
+            return e;
     
         DirectoryOp dir_op;
         dir_op.tag = DirectoryOp::Tag::DirectoryOp_CreateFile;
@@ -662,8 +662,7 @@ int Sysdeps<Open>::operator()(
     
         SyscallResult result = ::sys_invoke(parent_handle, &invocation);
     
-        if (parent_handle != g_root_handle)
-            ::sys_close(parent_handle);
+        ::sys_close(parent_handle);
     
         if (result.error != SysError::Success) {
             // The kernel reports an existing filename as InvalidArgument.
@@ -711,6 +710,78 @@ int Sysdeps<Open>::operator()(
     
     ::sys_close(file_handle);
     return EMFILE;
+}
+
+int Sysdeps<Mkdir>::operator()(const char *path, mode_t mode) {
+    (void)mode;
+    ensure_handles();
+
+    char storage[4096];
+    const char *name;
+    HandleID parent;
+    int e = resolve_parent(path, AccessRights::CREATE, &parent, &name, storage, sizeof(storage));
+    if (e)
+        return e;
+
+    DirectoryOp op{};
+    op.tag = DirectoryOp::Tag::DirectoryOp_CreateDir;
+    op.create_dir.name = reinterpret_cast<uintptr_t>(name);
+    op.create_dir.name_len = strlen(name);
+
+    Invocation invocation{};
+    invocation.tag = Invocation::Tag::Invocation_Directory;
+    invocation.directory._0 = op;
+
+    SyscallResult result = ::sys_invoke(parent, &invocation);
+    ::sys_close(parent);
+    if (result.error == SysError::Success)
+        ::sys_close(result.value);
+    if (result.error == SysError::InvalidArgument)
+        return EEXIST;
+    return map_error(result.error);
+}
+
+int Sysdeps<Unlinkat>::operator()(int dirfd, const char *path, int flags) {
+    (void)flags;
+    ensure_handles();
+    if (dirfd != AT_FDCWD)
+        return ENOTSUP;
+
+    char storage[4096];
+    const char *name;
+    HandleID parent;
+    int e = resolve_parent(path, AccessRights::REMOVE, &parent, &name, storage, sizeof(storage));
+    if (e)
+        return e;
+
+    DirectoryOp op{};
+    op.tag = DirectoryOp::Tag::DirectoryOp_Unlink;
+    op.unlink.name = reinterpret_cast<uintptr_t>(name);
+    op.unlink.name_len = strlen(name);
+
+    Invocation invocation{};
+    invocation.tag = Invocation::Tag::Invocation_Directory;
+    invocation.directory._0 = op;
+
+    SyscallResult result = ::sys_invoke(parent, &invocation);
+    ::sys_close(parent);
+    return map_error(result.error);
+}
+
+int Sysdeps<Rmdir>::operator()(const char *path) {
+    return sysdep<Unlinkat>(AT_FDCWD, path, AT_REMOVEDIR);
+}
+
+int Sysdeps<Chdir>::operator()(const char *path) {
+    ensure_handles();
+    HandleID next = resolve_path(path, AccessRights::TRAVERSE);
+    if (!next)
+        return EACCES;
+
+    if (g_cwd_handle != VESPERTINE_HANDLE_CWD)
+        ::sys_close(g_cwd_handle);
+    g_cwd_handle = next;
+    return 0;
 }
 
 int Sysdeps<Ftruncate>::operator()(int fd, size_t size) {
@@ -900,6 +971,7 @@ static void ensure_handles() {
             g_init_pkg = pkg;
             g_self_handle = pkg->self_handle;
             g_root_handle = pkg->root_handle;
+            g_cwd_handle = pkg->cwd_handle;
             g_sink_handle = pkg->sink_handle;
             g_mem_pool = pkg->memory_pool_handle;
 
@@ -912,53 +984,52 @@ static void ensure_handles() {
   }
 }
 
-static HandleID resolve_path(const char *path) {
+static HandleID resolve_path_from(const char *path, HandleID start, AccessRights rights) {
     if (!path || *path == '\0') return 0;
-    
-    HandleID curr = g_root_handle;
 
-    auto do_lookup = [](HandleID dir, const char *name, size_t len) -> HandleID {
-        DirectoryOp dir_op;
-        dir_op.tag = DirectoryOp::Tag::DirectoryOp_Lookup;
-        dir_op.lookup.name = reinterpret_cast<uintptr_t>(name);
-        dir_op.lookup.name_len = len;
+    DirectoryOp op{};
+    op.tag = DirectoryOp::Tag::DirectoryOp_Resolve;
+    op.resolve.start = start;
+    op.resolve.path_ptr = reinterpret_cast<uintptr_t>(path);
+    op.resolve.path_len = strlen(path);
+    op.resolve.rights = rights;
 
-        Invocation inv;
-        inv.tag = Invocation::Tag::Invocation_Directory;
-        inv.directory._0 = dir_op;
+    Invocation invocation{};
+    invocation.tag = Invocation::Tag::Invocation_Directory;
+    invocation.directory._0 = op;
 
-        SyscallResult res = ::sys_invoke(dir, &inv);
-        if (res.error != SysError::Success) {
-            return 0;
-        }
-        return res.value;
-    };
+    SyscallResult result = ::sys_invoke(g_root_handle, &invocation);
+    return result.error == SysError::Success ? result.value : 0;
+}
 
-    const char *p = path;
-    while (*p == '/') {
-        p++;
+static HandleID resolve_path(const char *path, AccessRights rights) {
+    return resolve_path_from(path, g_cwd_handle, rights);
+}
+
+static int resolve_parent(const char *path, AccessRights rights, HandleID *parent, const char **name, char *storage, size_t storage_size) {
+    size_t length = strlen(path);
+    if (!length || length >= storage_size)
+        return length ? ENAMETOOLONG : EINVAL;
+
+    memcpy(storage, path, length + 1);
+    while (length > 1 && storage[length - 1] == '/')
+        storage[--length] = '\0';
+
+    char *slash = find_last_char(storage, '/');
+    *name = slash ? slash + 1 : storage;
+    if (!**name)
+        return EINVAL;
+
+    const char *parent_path = ".";
+    if (slash == storage)
+        parent_path = "/";
+    else if (slash) {
+        *slash = '\0';
+        parent_path = storage;
     }
 
-    while (*p) {
-        const char *start = p;
-        while (*p && *p != '/') {
-            p++;
-        }
-        size_t len = p - start;
-        if (len > 0) {
-            HandleID next = do_lookup(curr, start, len);
-            if (next == 0) {
-                if (curr != g_root_handle) ::sys_close(curr);
-                return 0;
-            }
-            if (curr != g_root_handle) ::sys_close(curr);
-            curr = next;
-        }
-        while (*p == '/') {
-            p++;
-        }
-    }
-    return curr;
+    *parent = resolve_path(parent_path, rights);
+    return *parent ? 0 : EACCES;
 }
 
 static HandleID find_capability(CapabilityID capability) {

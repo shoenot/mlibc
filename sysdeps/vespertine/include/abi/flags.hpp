@@ -29,13 +29,21 @@ struct Signal {
 };
 
 struct AccessRights {
-    uint32_t bits;
+    uint8_t bits;
     AccessRights() = default;
-    constexpr AccessRights(uint32_t val) : bits(val) {}
+    constexpr AccessRights(uint8_t val) : bits(val) {}
 
-    static const uint32_t READ    = 1 << 0;
-    static const uint32_t WRITE   = 1 << 1;
-    static const uint32_t EXECUTE = 1 << 2;
+    static const uint8_t READ     = 1 << 0;
+    static const uint8_t WRITE    = 1 << 1;
+    static const uint8_t EXECUTE  = 1 << 2;
+    static const uint8_t CREATE   = 1 << 3;
+    static const uint8_t MUTATE   = 1 << 4;
+    static const uint8_t TRAVERSE = 1 << 5;
+    static const uint8_t LIST     = 1 << 6;
+    static const uint8_t REMOVE   = 1 << 7;
 
     constexpr AccessRights operator|(const AccessRights& other) const { return AccessRights(bits | other.bits); }
+    constexpr AccessRights operator&(const AccessRights& other) const { return AccessRights(bits & other.bits); }
 };
+
+static_assert(sizeof(AccessRights) == 1);
