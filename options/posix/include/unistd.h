@@ -446,6 +446,10 @@ int daemon(int __nochdir, int __noclose);
 
 #endif /* defined(_DEFAULT_SOURCE) */
 
+#if __MLIBC_BSD_OPTION
+int pledge(const char *__promises, const char *__execpromises);
+#endif
+
 #if defined(_GNU_SOURCE)
 extern char **environ;
 #endif /* defined(_GNU_SOURCE) */
@@ -500,4 +504,3 @@ int getresgid(gid_t *__rgid, gid_t *__egid, gid_t *__sgid);
 #endif
 
 #endif /* _UNISTD_H */
-

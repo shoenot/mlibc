@@ -52,4 +52,8 @@ int getgrouplist(const char *__user, gid_t __group, gid_t *__groups, int *__ngro
 }
 #endif
 
+#if __MLIBC_BSD_OPTION
+#	include <bits/bsd/bsd_grp.h>
+#endif
+
 #endif /* _GRP_H */

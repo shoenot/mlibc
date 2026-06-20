@@ -7,6 +7,10 @@
 extern "C" {
 #endif
 
+#if __MLIBC_BSD_OPTION
+#include <bits/bsd/err.h>
+#endif
+
 #ifndef __MLIBC_ABI_ONLY
 
 __attribute__((__format__(__printf__, 1, 2))) void warn(const char *__format, ...);

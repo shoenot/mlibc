@@ -20,9 +20,10 @@ struct Signal {
     Signal() = default;
     constexpr Signal(uint32_t val) : bits(val) {}
 
-    static const uint32_t READABLE  = 1 << 0;
-    static const uint32_t WRITABLE  = 1 << 1;
-    static const uint32_t ERROR     = 1 << 2;
+    static const uint32_t READABLE    = 1 << 0;
+    static const uint32_t WRITABLE    = 1 << 1;
+    static const uint32_t PEER_CLOSED = 1 << 2;
+    static const uint32_t TERMINATED  = 1 << 3;
 
     constexpr Signal operator|(const Signal& other) const { return Signal(bits | other.bits); }
     constexpr Signal operator&(const Signal& other) const { return Signal(bits & other.bits); }

@@ -103,5 +103,8 @@ static inline char *__mlibc_gnu_basename(char *__path) {
 #if __MLIBC_GLIBC_OPTION
 #	include <bits/glibc/glibc_string.h>
 #endif
+#if __MLIBC_BSD_OPTION
+#	include <bits/bsd/bsd_string.h>
+#endif
 
 #endif /* _STRING_H */

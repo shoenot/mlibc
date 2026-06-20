@@ -4,6 +4,7 @@
 
 #include <mlibc-config.h>
 
+#include <sys/types.h>
 #include <bits/posix/stat.h>
 
 #if __MLIBC_LINUX_OPTION

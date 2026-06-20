@@ -50,5 +50,8 @@ struct passwd *fgetpwent(FILE *__f);
 }
 #endif
 
-#endif /* _PWD_H */
+#if __MLIBC_BSD_OPTION
+#	include <bits/bsd/bsd_pwd.h>
+#endif
 
+#endif /* _PWD_H */

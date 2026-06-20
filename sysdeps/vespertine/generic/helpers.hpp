@@ -10,7 +10,7 @@ inline SysError ctrl_send(HandleID h, const T &payload) {
     hdr.magic        = VESPER_MAGIC;
     hdr.version      = 1;
     hdr.packet_flags = 1; // IS_BUFFER
-    hdr.packet_type  = 203; 
+    hdr.packet_type  = static_cast<uint32_t>(PacketType::TermCommand);
     hdr.payload_len  = sizeof(T);
     SysError e = socket_write_exact(h, &hdr, sizeof(hdr));
     if (e != SysError::Success) return e;

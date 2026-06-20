@@ -7,8 +7,12 @@
 /* On Linux, sys/ioctl.h includes the termios ioctls. */
 #if __MLIBC_LINUX_OPTION
 #	include <asm/ioctls.h>
-#	include <bits/winsize.h>
 #   include <sys/ttydefaults.h>
+#endif
+
+/* BSD applications also expect struct winsize from sys/ioctl.h. */
+#if __MLIBC_LINUX_OPTION || __MLIBC_BSD_OPTION
+#	include <bits/winsize.h>
 #endif
 
 #ifdef __cplusplus

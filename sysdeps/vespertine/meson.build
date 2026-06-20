@@ -1,12 +1,22 @@
 sysdep_supported_options = {
   'posix': true,
   'glibc': true,
+  'bsd': true,
 }
 
 inc = include_directories('include')
 
 rtld_sources += files(
-    'generic/sysdeps.cpp',
+    'generic/sysdeps_common.cpp',
+    'generic/sysdeps_thread.cpp',
+    'generic/sysdeps_memory.cpp',
+    'generic/sysdeps_fs.cpp',
+    'generic/sysdeps_fd_helpers.cpp',
+    'generic/sysdeps_time.cpp',
+    'generic/sysdeps_terminal.cpp',
+    'generic/sysdeps_process.cpp',
+    'generic/sysdeps_signal.cpp',
+    'generic/sysdeps_complex_stubs.cpp',
     'generic/syscall.cpp',
     'generic/helpers.cpp'
 )
@@ -15,8 +25,18 @@ rtld_include_dirs += inc
 libc_sources += files(
     'generic/entry.cpp',
     'generic/syscall.cpp',
-    'generic/sysdeps.cpp',
-    'generic/helpers.cpp'
+    'generic/sysdeps_common.cpp',
+    'generic/sysdeps_thread.cpp',
+    'generic/sysdeps_memory.cpp',
+    'generic/sysdeps_fs.cpp',
+    'generic/sysdeps_fd_helpers.cpp',
+    'generic/sysdeps_time.cpp',
+    'generic/sysdeps_terminal.cpp',
+    'generic/sysdeps_process.cpp',
+    'generic/sysdeps_signal.cpp',
+    'generic/sysdeps_complex_stubs.cpp',
+    'generic/helpers.cpp',
+    'generic/bsd_compat.cpp'
 )
 libc_include_dirs += inc
 
@@ -32,6 +52,10 @@ if not headers_only
 endif
 
 if not no_headers
+	install_headers(
+		'include/sys/sysmacros.h',
+		subdir: 'sys',
+	)
 	install_headers(
 		'include/abi-bits/auxv.h',
 		'include/abi-bits/blkcnt_t.h',
@@ -57,6 +81,7 @@ if not no_headers
 		'include/abi-bits/sigval.h',
 		'include/abi-bits/sa_family_t.h',
 		'include/abi-bits/sockaddr_storage.h',
+        'include/abi-bits/ioctls.h',
 		'include/abi-bits/sig-limits.h',
 		'include/abi-bits/suseconds_t.h',
 		'include/abi-bits/access.h',

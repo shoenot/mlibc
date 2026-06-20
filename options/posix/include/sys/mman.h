@@ -38,7 +38,7 @@ int remap_file_pages(void *__addr, size_t __size, int __prot, size_t __pgoff, in
 int memfd_create(const char *__name, unsigned int __flags);
 #endif /* __MLIBC_LINUX_OPTION && defined(_GNU_SOURCE) */
 
-#if __MLIBC_LINUX_OPTION && defined(_DEFAULT_SOURCE)
+#if __MLIBC_LINUX_OPTION && defined(_DEFAULT_SOURCE) || __MLIBC_BSD_OPTION
 int madvise(void *__addr, size_t __size, int __advise);
 int mincore(void *__addr, size_t __size, unsigned char *__vec);
 #endif /* __MLIBC_LINUX_OPTION && defined(_DEFAULT_SOURCE) */

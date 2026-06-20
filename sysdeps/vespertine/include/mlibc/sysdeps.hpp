@@ -19,6 +19,11 @@ struct VespertineSysdepTags :
     Close,
     FutexWake,
     FutexWait,
+    Stat,
+    OpenDir,
+    ReadEntries,
+    Dup,
+    Dup2,
     Read,
     Open,
     Mkdir,
@@ -33,7 +38,12 @@ struct VespertineSysdepTags :
     Tcgetattr,
     Tcsetattr,
     Tcgetwinsize,
-    Ioctl
+    Ioctl,
+    GetUid,
+    GetEuid,
+    GetGid,
+    GetEgid,
+    Madvise
 {};
 
 template<typename Tag>

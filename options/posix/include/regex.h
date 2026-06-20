@@ -30,10 +30,12 @@ typedef struct {
 #define REG_ICASE 2
 #define REG_NEWLINE 4
 #define REG_NOSUB 8
+#define REG_NOSPEC 16
 
 /* Flags for regexec(). */
 #define REG_NOTBOL 1
 #define REG_NOTEOL 2
+#define REG_STARTEND 4
 
 /* Errors for regcomp() and regexec(). */
 #define REG_OK 0

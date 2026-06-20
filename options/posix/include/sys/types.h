@@ -21,6 +21,7 @@
 #include <abi-bits/pid_t.h>
 #include <bits/posix/pthread_t.h>
 #include <bits/reclen_t.h>
+#include <stdint.h>
 #include <bits/size_t.h>
 #include <bits/ssize_t.h>
 #include <abi-bits/suseconds_t.h>
@@ -35,7 +36,6 @@ typedef char *__caddr_t;
 #if defined(_DEFAULT_SOURCE)
 #include <abi-bits/fd_set.h>
 #include <endian.h>
-#include <stdint.h>
 #include <sys/select.h>
 
 typedef unsigned int u_int;

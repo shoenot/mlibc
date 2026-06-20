@@ -115,7 +115,7 @@ size_t wcsnrtombs(char *__restrict __mbs, const wchar_t **__restrict __wcs, size
 		mbstate_t *__restrict __stp);
 
 /* POSIX extensions */
-#if __MLIBC_XOPEN
+#if __MLIBC_XOPEN || __MLIBC_BSD_OPTION
 int wcwidth(wchar_t __wc);
 int wcswidth(const wchar_t *__s, size_t __size);
 #endif

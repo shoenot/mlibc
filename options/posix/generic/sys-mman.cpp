@@ -71,6 +71,15 @@ void *mmap(void *hint, size_t size, int prot, int flags, int fd, off_t offset) {
 	return window;
 }
 
+int madvise(void *addr, size_t length, int advice) {
+	if(int e = mlibc::sysdep_or_enosys<Madvise>(addr, length, advice)) {
+		errno = e;
+		return -1;
+	}
+
+	return 0;
+}
+
 #if __MLIBC_LINUX_OPTION
 [[gnu::alias("mmap")]] void *mmap64(void *hint, size_t size, int prot, int flags, int fd, off64_t offset);
 #endif /* !__MLIBC_LINUX_OPTION */
@@ -148,15 +157,6 @@ int memfd_create(const char *name, unsigned int flags) {
 	}
 
 	return ret;
-}
-
-int madvise(void *addr, size_t length, int advice) {
-	if(int e = mlibc::sysdep_or_enosys<Madvise>(addr, length, advice)) {
-		errno = e;
-		return -1;
-	}
-
-	return 0;
 }
 
 int mincore(void *addr, size_t length, unsigned char *vec) {

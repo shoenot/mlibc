@@ -25,7 +25,7 @@ constexpr static const CapabilityID CAP_CLOCK = 8193;
 constexpr static const CapabilityID CAP_PROCMAN = 8194;
 constexpr static const CapabilityID CAP_SOCKFAC = 8195;
 
-constexpr static const CapabilityID CAP_TERMINAL_CONTROL = 12288;
+constexpr static const CapabilityID CAP_APP_TERMCTRL = 12288;
 
 struct CapabilityGrant {
     HandleID id;
@@ -64,6 +64,24 @@ struct alignas(8) PacketHeader {
     uint32_t _pad;
 };
 
+enum class PacketType : uint32_t {
+    Error = 0,
+    DirEntry = 1,
+    ProcessInfo = 2,
+    MemoryInfo = 3,
+    HandleInfo = 4,
+    SystemLog = 5,
+    Termios = 201,
+    TermSize = 202,
+    TermCommand = 203,
+    TermCursorPos = 204,
+    Value = 1000,
+    RecordSchema = 1001,
+    RecordPresentation = 1002,
+    StreamEnd = 1003,
+    ShellError = 1004,
+};
+
 enum class SysError : size_t {
     Success = 0,
     InvalidPointer = 1,
@@ -86,6 +104,58 @@ enum class SysError : size_t {
 struct SyscallResult {
     size_t value;
     SysError error;
+};
+
+enum class ObjectType : uint32_t {
+    File = 1,
+    Directory = 2,
+    Other = 3,
+};
+
+struct FileStat {
+    uint32_t object_type;
+    uint32_t mode;
+    uint32_t user;
+    uint32_t _group;
+    uint64_t inode;
+    uint64_t device;
+    uint64_t size;
+    uint32_t block_size;
+    uint64_t blocks;
+    uint32_t nlink;
+    int64_t atime_sec;
+    int64_t atime_nsec;
+    int64_t mtime_sec;
+    int64_t mtime_nsec;
+    int64_t ctime_sec;
+    int64_t ctime_nsec;
+};
+
+enum class ProcessExitKind : uint32_t {
+    Running = 0,
+    Exited = 1,
+    Killed = 2,
+    Faulted = 3,
+};
+
+struct ProcessExitInfo {
+    ProcessExitKind kind;
+    uint32_t code;
+    uint64_t detail;
+};
+
+struct ProcStatus {
+    uintptr_t pid;
+    UserID user;
+    uintptr_t active_threads;
+    bool is_terminated;
+    uintptr_t memory_usage;
+};
+
+struct WaitItem {
+    HandleID handle;
+    Signal signal;
+    Signal pending;
 };
 
 
@@ -219,6 +289,10 @@ struct FileOp {
     uintptr_t len;
   };
 
+  struct FileOp_Stat_Body {
+    uintptr_t stat_ptr;
+  };
+
   struct FileOp_Seek_Body {
     int64_t offset;
     uint32_t whence;
@@ -232,6 +306,7 @@ struct FileOp {
   union {
     FileOp_Read_Body read;
     FileOp_Write_Body write;
+    FileOp_Stat_Body stat;
     FileOp_Seek_Body seek;
     FileOp_Truncate_Body truncate;
   };
@@ -588,11 +663,20 @@ struct Termios {
   uint32_t c_ospeed;
 };
 
+struct WinSize {
+  unsigned short ws_row;
+  unsigned short ws_col;
+  unsigned short ws_xpixel;
+  unsigned short ws_ypixel;
+};
+
 struct TermCommand {
   enum class Tag {
     TermCommand_SetTermios,
     TermCommand_GetTermios,
     TermCommand_GetWindowSize,
+    TermCommand_GetCursorPosition,
+    TermCommand_Clear,
   };
 
   struct TermCommand_SetTermios_Body {

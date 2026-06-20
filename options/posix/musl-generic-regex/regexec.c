@@ -44,17 +44,22 @@
 
 static void
 tre_fill_pmatch(size_t nmatch, regmatch_t pmatch[], int cflags,
-		const tre_tnfa_t *tnfa, regoff_t *tags, regoff_t match_eo);
+		const tre_tnfa_t *tnfa, regoff_t *tags, regoff_t match_eo,
+		const regmatch_t *startend);
 
 /***********************************************************************
  from tre-match-utils.h
 ***********************************************************************/
 
 #define GET_NEXT_WCHAR() do {                                                 \
+    size_t max_len = startend ?                                               \
+        MIN((const char *)string + startend->rm_eo - str_byte, MB_LEN_MAX) :  \
+        MB_LEN_MAX;                                                           \
     prev_c = next_c; pos += pos_add_next;                                     \
-    if ((pos_add_next = mbtowc(&next_c, str_byte, MB_LEN_MAX)) <= 0) {        \
+    if (!max_len) { next_c = L'\0'; pos_add_next = 1; }                       \
+    else if ((pos_add_next = mbtowc(&next_c, str_byte, max_len)) <= 0) {      \
         if (pos_add_next < 0) { ret = REG_NOMATCH; goto error_exit; }         \
-        else pos_add_next++;                                                  \
+        else { pos_add_next++; if (startend) next_c = -1; };                  \
     }                                                                         \
     str_byte += pos_add_next;                                                 \
   } while (0)
@@ -169,11 +174,11 @@ typedef struct {
 static reg_errcode_t
 tre_tnfa_run_parallel(const tre_tnfa_t *tnfa, const void *string,
 		      regoff_t *match_tags, int eflags,
-		      regoff_t *match_end_ofs)
+		      regoff_t *match_end_ofs, const regmatch_t *startend)
 {
   /* State variables required by GET_NEXT_WCHAR. */
   tre_char_t prev_c = 0, next_c = 0;
-  const char *str_byte = string;
+  const char *str_byte = (const char *)string + (startend ? startend->rm_so : 0);
   regoff_t pos = -1;
   regoff_t pos_add_next = 1;
 #ifdef TRE_MBSTATE
@@ -591,11 +596,12 @@ typedef struct tre_backtrack_struct {
 
 static reg_errcode_t
 tre_tnfa_run_backtrack(const tre_tnfa_t *tnfa, const void *string,
-		       regoff_t *match_tags, int eflags, regoff_t *match_end_ofs)
+		       regoff_t *match_tags, int eflags,
+		       regoff_t *match_end_ofs, const regmatch_t *startend)
 {
   /* State variables required by GET_NEXT_WCHAR. */
   tre_char_t prev_c = 0, next_c = 0;
-  const char *str_byte = string;
+  const char *str_byte = (const char *)string + (startend ? startend->rm_so : 0);
   regoff_t pos = 0;
   regoff_t pos_add_next = 1;
 #ifdef TRE_MBSTATE
@@ -777,7 +783,7 @@ tre_tnfa_run_backtrack(const tre_tnfa_t *tnfa, const void *string,
 	  /* Get the substring we need to match against.  Remember to
 	     turn off REG_NOSUB temporarily. */
 	  tre_fill_pmatch(bt + 1, pmatch, tnfa->cflags & ~REG_NOSUB,
-			  tnfa, tags, pos);
+			  tnfa, tags, pos, startend);
 	  so = pmatch[bt].rm_so;
 	  eo = pmatch[bt].rm_eo;
 	  bt_len = eo - so;
@@ -928,9 +934,11 @@ tre_tnfa_run_backtrack(const tre_tnfa_t *tnfa, const void *string,
    endpoint values. */
 static void
 tre_fill_pmatch(size_t nmatch, regmatch_t pmatch[], int cflags,
-		const tre_tnfa_t *tnfa, regoff_t *tags, regoff_t match_eo)
+		const tre_tnfa_t *tnfa, regoff_t *tags, regoff_t match_eo,
+		const regmatch_t *startend)
 {
   tre_submatch_data_t *submatch_data;
+  regoff_t offset = startend ? startend->rm_so : 0;
   unsigned int i, j;
   int *parents;
 
@@ -955,6 +963,8 @@ tre_fill_pmatch(size_t nmatch, regmatch_t pmatch[], int cflags,
 	     was not part of the match. */
 	  if (pmatch[i].rm_so == -1 || pmatch[i].rm_eo == -1)
 	    pmatch[i].rm_so = pmatch[i].rm_eo = -1;
+	  else
+	    { pmatch[i].rm_so += offset; pmatch[i].rm_eo += offset; }
 
 	  i++;
 	}
@@ -999,6 +1009,7 @@ regexec(const regex_t *restrict preg, const char *restrict string,
   tre_tnfa_t *tnfa = (void *)preg->TRE_REGEX_T_FIELD;
   reg_errcode_t status;
   regoff_t *tags = NULL, eo;
+  const regmatch_t *startend = (eflags & REG_STARTEND) ? pmatch : NULL;
   if (tnfa->cflags & REG_NOSUB) nmatch = 0;
   if (tnfa->num_tags > 0 && nmatch > 0)
     {
@@ -1011,17 +1022,19 @@ regexec(const regex_t *restrict preg, const char *restrict string,
   if (tnfa->have_backrefs)
     {
       /* The regex has back references, use the backtracking matcher. */
-      status = tre_tnfa_run_backtrack(tnfa, string, tags, eflags, &eo);
+      status = tre_tnfa_run_backtrack(tnfa, string, tags, eflags, &eo,
+                                      startend);
     }
   else
     {
       /* Exact matching, no back references, use the parallel matcher. */
-      status = tre_tnfa_run_parallel(tnfa, string, tags, eflags, &eo);
+      status = tre_tnfa_run_parallel(tnfa, string, tags, eflags, &eo,
+                                     startend);
     }
 
   if (status == REG_OK)
     /* A match was found, so fill the submatch registers. */
-    tre_fill_pmatch(nmatch, pmatch, tnfa->cflags, tnfa, tags, eo);
+    tre_fill_pmatch(nmatch, pmatch, tnfa->cflags, tnfa, tags, eo, startend);
   if (tags)
     xfree(tags);
   return status;
