@@ -99,7 +99,11 @@ int Sysdeps<Stat>::operator()(fsfd_target fsfdt, int fd, const char *path, int f
         case fsfd_target::path:
             if (!path || !*path)
                 return ENOENT;
-            handle = resolve_path(path, AccessRights(0));
+            {
+                int error = resolve_path(path, AccessRights(0), &handle);
+                if (error)
+                    return error;
+            }
             close_handle = true;
             break;
         case fsfd_target::fd_path:
@@ -122,7 +126,9 @@ int Sysdeps<Stat>::operator()(fsfd_target fsfdt, int fd, const char *path, int f
                         return EBADF;
                 }
 
-                handle = resolve_path_from(path, start, AccessRights(0));
+                int error = resolve_path_from(path, start, AccessRights(0), &handle);
+                if (error)
+                    return error;
                 close_handle = true;
             }
             break;
@@ -130,8 +136,6 @@ int Sysdeps<Stat>::operator()(fsfd_target fsfdt, int fd, const char *path, int f
             return EINVAL;
     }
 
-    if (!handle)
-        return ENOENT;
 
     int error = stat_handle(handle, statbuf);
     if (close_handle)
@@ -145,12 +149,13 @@ int Sysdeps<OpenDir>::operator()(const char *path, int *handle) {
     if (!path || !*path || !handle)
         return EINVAL;
 
-    HandleID dir = resolve_path(path, AccessRights::LIST | AccessRights::TRAVERSE);
-    if (!dir)
-        return ENOENT;
+    HandleID dir;
+    int error = resolve_path(path, AccessRights::LIST | AccessRights::TRAVERSE, &dir);
+    if (error)
+        return error;
 
     struct stat statbuf{};
-    int error = stat_handle(dir, &statbuf);
+    error = stat_handle(dir, &statbuf);
     if (error) {
         ::sys_close(dir);
         return error;
@@ -393,15 +398,19 @@ int Sysdeps<Open>::operator()(
     if (flags & O_DIRECTORY)
         requested_rights = AccessRights::LIST | AccessRights::TRAVERSE;
 
-    HandleID file_handle = resolve_path(local_path, requested_rights);
+    HandleID file_handle;
+    int resolve_error = resolve_path(local_path, requested_rights, &file_handle);
     
-    if (file_handle != 0) {
+    if (!resolve_error) {
         // O_CREAT | O_EXCL must fail when the file already exists.
         if ((flags & O_CREAT) && (flags & O_EXCL)) {
             ::sys_close(file_handle);
             return EEXIST;
         }
     } else {
+        if (resolve_error != ENOENT)
+            return resolve_error;
+
         if (!(flags & O_CREAT))
             return ENOENT;
     
@@ -524,9 +533,10 @@ int Sysdeps<Rmdir>::operator()(const char *path) {
 
 int Sysdeps<Chdir>::operator()(const char *path) {
     ensure_handles();
-    HandleID next = resolve_path(path, AccessRights::TRAVERSE);
-    if (!next)
-        return EACCES;
+    HandleID next;
+    int error = resolve_path(path, AccessRights::TRAVERSE, &next);
+    if (error)
+        return error;
 
     if (g_cwd_handle != VESPERTINE_HANDLE_CWD)
         ::sys_close(g_cwd_handle);

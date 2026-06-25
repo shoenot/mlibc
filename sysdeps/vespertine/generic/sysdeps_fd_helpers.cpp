@@ -133,8 +133,14 @@ int duplicate_fd_to(int oldfd, int newfd) {
     return 0;
 }
 
-HandleID resolve_path_from(const char *path, HandleID start, AccessRights rights) {
-    if (!path || *path == '\0') return 0;
+int resolve_path_from(const char *path, HandleID start, AccessRights rights, HandleID *handle) {
+    if (!handle)
+        return EINVAL;
+
+    *handle = 0;
+
+    if (!path || *path == '\0')
+        return ENOENT;
 
     DirectoryOp op{};
     op.tag = DirectoryOp::Tag::DirectoryOp_Resolve;
@@ -148,7 +154,11 @@ HandleID resolve_path_from(const char *path, HandleID start, AccessRights rights
     invocation.directory._0 = op;
 
     SyscallResult result = ::sys_invoke(g_root_handle, &invocation);
-    return result.error == SysError::Success ? result.value : 0;
+    if (result.error != SysError::Success)
+        return map_error(result.error);
+
+    *handle = result.value;
+    return 0;
 }
 
 int request_socket_factory(HandleID *factory) {
@@ -158,9 +168,10 @@ int request_socket_factory(HandleID *factory) {
         return 0;
     }
 
-    HandleID broker = resolve_path("/System/Services/Socket", AccessRights::READ);
-    if (!broker)
-        return ENOENT;
+    HandleID broker;
+    int error = resolve_path("/System/Services/Socket", AccessRights::READ, &broker);
+    if (error)
+        return error;
 
     BrokerOp broker_op{};
     broker_op.tag = BrokerOp::Tag::BrokerOp_Request;
@@ -287,8 +298,8 @@ int read_exact_handle(HandleID handle, void *buffer, size_t size, bool *eof) {
     return 0;
 }
 
-HandleID resolve_path(const char *path, AccessRights rights) {
-    return resolve_path_from(path, g_cwd_handle, rights);
+int resolve_path(const char *path, AccessRights rights, HandleID *handle) {
+    return resolve_path_from(path, g_cwd_handle, rights, handle);
 }
 
 int resolve_parent(const char *path, AccessRights rights, HandleID *parent, const char **name, char *storage, size_t storage_size) {
@@ -313,8 +324,7 @@ int resolve_parent(const char *path, AccessRights rights, HandleID *parent, cons
         parent_path = storage;
     }
 
-    *parent = resolve_path(parent_path, rights);
-    return *parent ? 0 : EACCES;
+    return resolve_path(parent_path, rights, parent);
 }
 
 

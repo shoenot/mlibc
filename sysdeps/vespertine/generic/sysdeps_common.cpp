@@ -22,6 +22,7 @@ int map_error(SysError err) {
         case SysError::Success:         return 0;
         case SysError::OutOfMemory:     return ENOMEM;
         case SysError::PoolExhausted:   return ENOMEM;
+        case SysError::BadAddress:      return ENOENT;
         case SysError::InvalidHandle:   return EBADF;
         case SysError::AccessDenied:    return EACCES;
         case SysError::InvalidArgument: return EINVAL;
